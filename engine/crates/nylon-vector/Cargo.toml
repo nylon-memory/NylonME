@@ -1,0 +1,6 @@
+[package]
+name = "nylon-vector"
+description = "向量检索接口与实现（当前：暴力余弦；HNSW 见路线图交付物 1.2）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true

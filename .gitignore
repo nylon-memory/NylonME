@@ -1,0 +1,8 @@
+target/
+dist/
+*.exe
+*.pdb
+.env
+
+# 本机链接器配置（windows-gnu/rust-lld），不进版本库
+engine/.cargo/config.toml

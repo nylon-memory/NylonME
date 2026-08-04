@@ -1,0 +1,11 @@
+[package]
+name = "nylon-engine"
+description = "尼龙记忆引擎可执行入口"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nylon-core = { path = "../nylon-core" }
+nylon-graph = { path = "../nylon-graph" }
+nylon-vector = { path = "../nylon-vector" }

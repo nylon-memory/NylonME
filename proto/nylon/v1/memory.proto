@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package nylon.v1;
+
+option go_package = "github.com/nylonmemory/nylon/api/gen/nylon/v1;nylonv1";
+
+// 尼龙记忆引擎 gRPC 契约（对应《尼龙技术架构设计》2.2 节）
+service MemoryEngine {
+  // 记忆编织：原始事件 → 多丝分解 → 建边 → 冲突检测 → 入库
+  rpc Weave(WeaveRequest) returns (WeaveResponse);
+  // 情境共振：种子 + 情境 → 共振记忆簇（优先级队列 + 全局激活预算）
+  rpc Resonate(ResonateRequest) returns (ResonateResponse);
+  // 向量检索：Top-K 近邻
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // 读取单节点（含实时张力）
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+}
+
+// 记忆丝（对应《尼龙记忆模型》2.2 节）
+message Filaments {
+  string fact = 1;                 // 事实丝
+  float emotion_valence = 2;       // 情感丝：效价 [-1, 1]
+  float emotion_intensity = 3;     // 情感丝：强度 [0, 1]
+  int64 created_at = 4;            // 时序丝：Unix 秒
+  float decay_rate = 5;            // 时序丝：遗忘速率 λ（1/天）
+  repeated string relations = 6;   // 关系丝
+  float confidence = 7;            // 置信丝 [0, 1]
+  uint32 mentions_7d = 8;          // 频次丝
+}
+
+message ContextSpectrum {
+  optional string task = 1;              // 任务上下文
+  optional float emotion_valence = 2;    // 情绪上下文
+  optional string device = 3;            // 设备上下文
+}
+
+message WeaveRequest {
+  string tenant_id = 1;
+  string owner_id = 2;
+  string raw_event = 3;            // 原始事件文本（服务端做多丝分解）
+  ContextSpectrum context = 4;
+}
+
+message WeaveResponse {
+  uint64 node_id = 1;
+  repeated uint64 linked_nodes = 2;   // 新建的关联边目标
+  repeated uint64 conflict_nodes = 3; // 检测到矛盾并标注的节点
+}
+
+message ResonateRequest {
+  string tenant_id = 1;
+  string owner_id = 2;
+  string query = 3;                   // 用于生成种子节点
+  ContextSpectrum context = 4;
+  uint32 budget = 5;                  // 全局激活预算（Top-K 截断，默认 64）
+}
+
+message ActivatedNode {
+  uint64 node_id = 1;
+  float resonance = 2;
+  Filaments filaments = 3;
+}
+
+message ResonateResponse {
+  repeated ActivatedNode activated = 1;  // 按共振强度降序
+}
+
+message SearchRequest {
+  string tenant_id = 1;
+  string owner_id = 2;
+  bytes query_embedding = 3;  // f32 小端字节序
+  uint32 top_k = 4;
+}
+
+message SearchResponse {
+  repeated ActivatedNode neighbors = 1;
+}
+
+message GetNodeRequest {
+  string tenant_id = 1;
+  uint64 node_id = 2;
+}
+
+message GetNodeResponse {
+  uint64 node_id = 1;
+  Filaments filaments = 2;
+  float current_tension = 3;
+}

@@ -1,0 +1,9 @@
+[package]
+name = "nylon-graph"
+description = "CSR 主图 + Delta 缓冲 + 情境共振遍历"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nylon-core = { path = "../nylon-core" }

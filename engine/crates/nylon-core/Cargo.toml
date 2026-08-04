@@ -1,0 +1,6 @@
+[package]
+name = "nylon-core"
+description = "尼龙记忆核心数据模型：记忆丝 + 张力遗忘"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
