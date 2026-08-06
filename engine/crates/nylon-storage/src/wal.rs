@@ -105,13 +105,17 @@ fn decode_op(payload: &[u8]) -> Option<WalOp> {
 /// WAL 文件句柄。
 pub struct Wal {
     file: File,
+    /// 是否每次 append 后 fsync。诊断旋钮 NYLON_WAL_NO_FSYNC=1 可关闭，
+    /// 仅用于基准 profiling（区分 fsync 成本），生产环境严禁使用。
+    fsync: bool,
 }
 
 impl Wal {
     pub fn open(dir: &Path) -> io::Result<Wal> {
         let path = dir.join(WAL_FILE);
         let file = OpenOptions::new().read(true).write(true).create(true).open(path)?;
-        Ok(Wal { file })
+        let fsync = std::env::var_os("NYLON_WAL_NO_FSYNC").is_none();
+        Ok(Wal { file, fsync })
     }
 
     /// 追加一条操作并 fsync（先写日志后改内存，保证崩溃可恢复）。
@@ -123,7 +127,10 @@ impl Wal {
         rec.extend_from_slice(&payload);
         self.file.seek(SeekFrom::End(0))?;
         self.file.write_all(&rec)?;
-        self.file.sync_all()
+        if self.fsync {
+            self.file.sync_all()?;
+        }
+        Ok(())
     }
 
     /// 重放全部有效记录；在第一条损坏/不完整记录处截断文件并返回已验证的前缀。

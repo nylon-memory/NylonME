@@ -5,7 +5,7 @@
 //! - Weave 的多丝分解为启发式：fact=原文、关系丝取自 context.task、
 //!   置信丝默认 0.8；同 owner 且关系丝重叠的历史节点自动建边（最多 3 条）；
 //! - 冲突检测依赖语义推理模型，Phase 1 恒返回空；
-//! - Resonate 种子：query 子串命中事实丝 > context.task 命中关系丝 > 最近节点兜底；
+//! - Resonate 种子：query 词项重叠打分（子串命中加权） > task 命中关系丝 > 最近节点兜底；
 //! - Search 走 HNSW，查询向量逐维度截断/补零到索引维度。
 
 use nylon_core::{compute_tension, Filaments, MemoryNode, Tension};
@@ -141,14 +141,28 @@ impl MemoryEngine for EngineService {
         let ctx = to_context(r.context);
         let query = r.query.to_lowercase();
 
-        // 种子选择：query 子串命中事实丝 > task 命中关系丝 > 最近节点兜底
+        // 种子选择：query 词项重叠打分（完整子串命中加权） > task 命中关系丝 > 最近节点兜底。
+        // 词项化按非字母数字切分；CJK 查询无空格时退化为整串 contains，行为与原先一致。
         let mut seeds: Vec<u32> = Vec::new();
         if !query.is_empty() {
-            seeds = g
-                .live_nodes()
-                .filter(|(_, n)| n.owner_id == r.owner_id && n.filaments.fact.to_lowercase().contains(&query))
-                .map(|(id, _)| id)
+            let terms: Vec<&str> = query
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|t| !t.is_empty())
                 .collect();
+            let mut scored: Vec<(u32, usize)> = g
+                .live_nodes()
+                .filter(|(_, n)| n.owner_id == r.owner_id)
+                .filter_map(|(id, n)| {
+                    let fact = n.filaments.fact.to_lowercase();
+                    let mut score = terms.iter().filter(|t| fact.contains(**t)).count();
+                    if !terms.is_empty() && fact.contains(&query) {
+                        score += terms.len(); // 完整子串命中额外加权
+                    }
+                    if score > 0 { Some((id, score)) } else { None }
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            seeds = scored.into_iter().map(|(id, _)| id).collect();
         }
         if seeds.is_empty() {
             if let Some(task) = &ctx.task {

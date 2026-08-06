@@ -1,0 +1,150 @@
+//! LoCoMo 子集检索评测：把多轮对话逐轮织入引擎，对 QA 问题跑 Resonate，
+//! 统计 gold evidence 轮次是否出现在激活结果前 10（recall@10）。
+//!
+//! 数据集：https://github.com/snap-research/locomo （data/locomo10.json）
+//! 用法：
+//!   $env:NYLON_LOCOMO_PATH="D:\data\locomo10.json"
+//!   cargo test --release -p nylon-engine --test locomo_eval -- --ignored --nocapture
+//!
+//! 口径说明：Phase 1 的 Resonate 种子是词面检索（嵌入模型未接入），本评测度量
+//! 检索/激活层的证据召回率，不是端到端 QA 准确率（后者需要 LLM 生成 + 裁判）。
+//! category=5 为对抗题（答案"未提及"），不计入。
+
+#[path = "../src/service.rs"]
+mod service;
+
+use nylon_storage::PersistentGraph;
+use service::pb::memory_engine_client::MemoryEngineClient;
+use service::pb::memory_engine_server::MemoryEngineServer;
+use service::pb::*;
+use service::EngineService;
+use std::collections::HashMap;
+
+const RECALL_K: usize = 10;
+
+#[tokio::test]
+#[ignore = "需要 LoCoMo 数据集（NYLON_LOCOMO_PATH），手动运行"]
+async fn locomo_evidence_recall() {
+    let path = std::env::var("NYLON_LOCOMO_PATH").expect("请设置 NYLON_LOCOMO_PATH 指向 locomo10.json");
+    let limit: usize = std::env::var("NYLON_LOCOMO_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let data: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败")).expect("解析 JSON 失败");
+
+    // 内存端口起服务
+    let dir = tempfile::tempdir().unwrap();
+    let store = PersistentGraph::open(dir.path()).unwrap();
+    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(MemoryEngineServer::new(svc))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut client = MemoryEngineClient::connect(addr).await.unwrap();
+
+    let mut total = 0usize;
+    let mut hit = 0usize;
+    let mut per_cat: HashMap<i64, (usize, usize)> = HashMap::new(); // cat -> (total, hit)
+    let mut total_turns = 0usize;
+
+    for conv in data.as_array().expect("顶层应为数组").iter().take(limit) {
+        let sample = conv["sample_id"].as_str().unwrap_or("unknown").to_string();
+        let conv_obj = conv["conversation"].as_object().expect("conversation 应为对象");
+
+        // 按 session 数字序织入全部轮次
+        let mut sessions: Vec<&String> = conv_obj
+            .keys()
+            .filter(|k| k.starts_with("session_") && !k.ends_with("_date_time"))
+            .collect();
+        sessions.sort_by_key(|k| {
+            k.trim_start_matches("session_").parse::<u32>().unwrap_or(0)
+        });
+
+        let mut dia2node: HashMap<String, u64> = HashMap::new();
+        for sess in sessions {
+            for turn in conv_obj[sess].as_array().cloned().unwrap_or_default() {
+                let dia = turn["dia_id"].as_str().unwrap_or("").to_string();
+                let speaker = turn["speaker"].as_str().unwrap_or("");
+                let text = turn["text"].as_str().unwrap_or("");
+                if dia.is_empty() || text.is_empty() {
+                    continue;
+                }
+                let resp = client
+                    .weave(WeaveRequest {
+                        tenant_id: "locomo".into(),
+                        owner_id: sample.clone(),
+                        raw_event: format!("{speaker}: {text}"),
+                        context: None,
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                dia2node.insert(dia, resp.node_id);
+                total_turns += 1;
+            }
+        }
+
+        // 对每个可答 QA 跑共振检索
+        for qa in conv["qa"].as_array().cloned().unwrap_or_default() {
+            let cat = qa["category"].as_i64().unwrap_or(0);
+            if cat == 5 {
+                continue; // 对抗题不计入
+            }
+            let evidence: Vec<String> = qa["evidence"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|e| e.as_str().map(|s| s.to_string()))
+                .collect();
+            if evidence.is_empty() {
+                continue;
+            }
+            let question = qa["question"].as_str().unwrap_or("");
+            let resp = client
+                .resonate(ResonateRequest {
+                    tenant_id: "locomo".into(),
+                    owner_id: sample.clone(),
+                    query: question.into(),
+                    context: None,
+                    budget: 32,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let got: Vec<u64> = resp.activated.iter().take(RECALL_K).map(|a| a.node_id).collect();
+            let ok = evidence
+                .iter()
+                .any(|e| dia2node.get(e).map(|n| got.contains(n)).unwrap_or(false));
+            total += 1;
+            if ok {
+                hit += 1;
+            }
+            let entry = per_cat.entry(cat).or_insert((0, 0));
+            entry.0 += 1;
+            if ok {
+                entry.1 += 1;
+            }
+        }
+    }
+
+    println!();
+    println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, 词面检索口径） ===");
+    println!("会话数: {limit}, 织入轮次: {total_turns}");
+    if total > 0 {
+        println!("有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%", hit as f64 / total as f64 * 100.0);
+    } else {
+        println!("无有效 QA");
+    }
+    let mut cats: Vec<_> = per_cat.iter().map(|(c, v)| (*c, *v)).collect();
+    cats.sort_by_key(|(c, _)| *c);
+    for (cat, (t, h)) in &cats {
+        println!("  category {cat}: {h}/{t} = {:.1}%", *h as f64 / *t as f64 * 100.0);
+    }
+}
