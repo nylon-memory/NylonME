@@ -58,6 +58,9 @@ pub fn compute_tension(node: &MemoryNode, now: i64, context_boost: f32) -> f32 {
     t.min(1.0)
 }
 
+pub mod wire;
+pub use wire::{decode_nodes, encode_nodes, DecodeError};
+
 #[cfg(test)]
 mod tests {
     use super::*;

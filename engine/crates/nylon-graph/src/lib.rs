@@ -67,6 +67,53 @@ struct DeltaGraph {
     edge_count: usize,
 }
 
+/// 六丝组合检索过滤器：各字段 AND 组合，None 表示不限制。
+#[derive(Debug, Default, Clone)]
+pub struct FilamentFilter {
+    /// 关系丝：命中任一标签即匹配
+    pub relations_any: Option<Vec<String>>,
+    /// 情感丝：效价闭区间
+    pub emotion_range: Option<(f32, f32)>,
+    /// 时序丝：创建时间闭区间
+    pub time_range: Option<(i64, i64)>,
+    /// 置信丝：下限
+    pub min_confidence: Option<f32>,
+    /// 频次丝：下限
+    pub min_mentions: Option<u32>,
+}
+
+impl FilamentFilter {
+    fn matches(&self, node: &MemoryNode) -> bool {
+        let f = &node.filaments;
+        if let Some(tags) = &self.relations_any {
+            if !tags.iter().any(|t| f.relations.contains(t)) {
+                return false;
+            }
+        }
+        if let Some((lo, hi)) = self.emotion_range {
+            if f.emotion_valence < lo || f.emotion_valence > hi {
+                return false;
+            }
+        }
+        if let Some((lo, hi)) = self.time_range {
+            if f.created_at < lo || f.created_at > hi {
+                return false;
+            }
+        }
+        if let Some(min) = self.min_confidence {
+            if f.confidence < min {
+                return false;
+            }
+        }
+        if let Some(min) = self.min_mentions {
+            if f.mentions_7d < min {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// 情境信号（对应《尼龙记忆模型》2.5 节，v1 先实现任务 + 情绪两维）。
 #[derive(Debug, Default, Clone)]
 pub struct ContextSpectrum {
@@ -223,6 +270,19 @@ impl MemoryGraph {
             found = true;
         }
         found
+    }
+
+    /// 六丝组合检索：多条件 AND 组合，排除墓碑节点，结果按局部 ID 升序。
+    /// 空过滤器返回全部存活节点。
+    pub fn find_by_filaments(&self, filter: &FilamentFilter) -> Vec<u32> {
+        let mut out: Vec<u32> = self
+            .nodes
+            .iter()
+            .filter(|(id, n)| !self.tombstones.contains(id) && filter.matches(n))
+            .map(|(id, _)| *id)
+            .collect();
+        out.sort_unstable();
+        out
     }
 
     /// 按分片内局部 ID 读取节点（已删除节点对外不可见）。
@@ -602,5 +662,34 @@ mod tests {
         let ns = g.neighbors(a);
         assert_eq!(ns.len(), 1, "Delta 内重复边应合并: {ns:?}");
         assert_eq!(ns[0].1, 0.7);
+    }
+
+    #[test]
+    fn find_by_filaments_combines_conditions() {
+        let mut g = MemoryGraph::new();
+        let a = g.add_node(node("出差偏好", &["出差"]));
+        let b = g.add_node(node("科幻小说", &["阅读"]));
+        let c = g.add_node(node("出差报销", &["出差", "财务"]));
+        // 单条件
+        let f = FilamentFilter { relations_any: Some(vec!["出差".into()]), ..Default::default() };
+        assert_eq!(g.find_by_filaments(&f), vec![a, c]);
+        // 多条件 AND
+        let f = FilamentFilter {
+            relations_any: Some(vec!["出差".into()]),
+            min_confidence: Some(0.95),
+            ..Default::default()
+        };
+        assert_eq!(g.find_by_filaments(&f), vec![], "置信度 0.9 应被 0.95 过滤");
+        let f = FilamentFilter {
+            relations_any: Some(vec!["出差".into(), "阅读".into()]),
+            min_mentions: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(g.find_by_filaments(&f), vec![a, b, c], "任一标签命中");
+        // 空过滤器返回全部活节点
+        assert_eq!(g.find_by_filaments(&FilamentFilter::default()), vec![a, b, c]);
+        // 墓碑排除
+        g.remove_node(b);
+        assert_eq!(g.find_by_filaments(&FilamentFilter::default()), vec![a, c]);
     }
 }

@@ -2,7 +2,7 @@
 //! gRPC 服务化（tonic）为路线图 Week 3-4 任务，需先定义 proto codegen（见 proto/）。
 
 use nylon_core::{Filaments, MemoryNode, Tension};
-use nylon_graph::{ContextSpectrum, MemoryGraph, DEFAULT_BUDGET};
+use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
 use nylon_vector::{BruteForceIndex, VectorIndex};
 
 fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNode {
@@ -57,5 +57,22 @@ fn main() {
     let top = idx.search(&[1.0, 0.1, 0.0], 1);
     println!("\n向量 Top-1: node {} sim={:.3}", top[0].0, top[0].1);
 
-    println!("\n自检通过：图遍历 + 张力 + 向量检索基线可用。");
+    // .nylon 二进制编解码 roundtrip
+    let snapshot: Vec<MemoryNode> =
+        (0..5u32).filter_map(|i| g.get_node(i).cloned()).collect();
+    let bytes = nylon_core::encode_nodes(&snapshot);
+    let restored = nylon_core::decode_nodes(&bytes).expect("decode .nylon");
+    assert_eq!(restored, snapshot, ".nylon roundtrip 应完全保真");
+    println!("\n.nylon 编解码: {} 节点 -> {} 字节, roundtrip 保真", snapshot.len(), bytes.len());
+
+    // 六丝组合检索演示
+    let hits = g.find_by_filaments(&FilamentFilter {
+        relations_any: Some(vec!["出差".into()]),
+        min_confidence: Some(0.5),
+        ..Default::default()
+    });
+    println!("六丝检索（出差 + 置信>=0.5）: 命中 {} 个节点 {:?}", hits.len(), hits);
+    assert_eq!(hits.len(), 4);
+
+    println!("\n自检通过：图遍历 + 张力 + 向量检索 + .nylon 编解码 + 六丝检索基线可用。");
 }
