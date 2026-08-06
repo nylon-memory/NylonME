@@ -1,6 +1,10 @@
 //! 向量检索接口。
-//! 当前为暴力余弦实现（单机正确性基线）；
-//! 自研 HNSW（Top-100 < 10ms @ 百万级）为路线图交付物 1.2。
+//! 暴力余弦实现（[`BruteForceIndex`]）作为单机正确性基线；
+//! 自研 HNSW（[`HnswIndex`]）提供近似最近邻检索。
+
+mod hnsw;
+
+pub use hnsw::{HnswIndex, HnswParams};
 
 /// 向量索引抽象：便于从暴力实现平滑切换到 HNSW。
 pub trait VectorIndex {
