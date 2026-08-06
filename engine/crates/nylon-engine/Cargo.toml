@@ -1,6 +1,6 @@
 [package]
 name = "nylon-engine"
-description = "尼龙记忆引擎可执行入口"
+description = "尼龙记忆引擎可执行入口（自检 demo + gRPC 服务）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,15 @@ nylon-core = { path = "../nylon-core" }
 nylon-graph = { path = "../nylon-graph" }
 nylon-vector = { path = "../nylon-vector" }
 nylon-storage = { path = "../nylon-storage" }
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-stream = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"

@@ -3,6 +3,8 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+mod service;
+
 use nylon_storage::PersistentGraph;
 use nylon_vector::{BruteForceIndex, VectorIndex};
 
@@ -26,6 +28,29 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("serve") {
+        let addr = args.get(2).cloned().unwrap_or_else(|| "127.0.0.1:50051".into());
+        let data = std::env::var("NYLON_DATA_DIR").unwrap_or_else(|_| "./nylon-data".into());
+        let dims: usize = std::env::var("NYLON_EMBED_DIMS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(service::DEFAULT_EMBED_DIMS);
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async move {
+            let store = PersistentGraph::open(&data).expect("open persistent store");
+            let svc = service::EngineService::new(store, dims);
+            let sock = addr.parse().expect("invalid listen addr");
+            println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
+            tonic::transport::Server::builder()
+                .add_service(service::pb::memory_engine_server::MemoryEngineServer::new(svc))
+                .serve(sock)
+                .await
+                .expect("gRPC server");
+        });
+        return;
+    }
+
     println!("nylon-engine v0.1.0 (Phase 1 scaffold)");
 
     // 构建一个迷你记忆网：机票 -> 出差偏好 -> 酒店偏好 / 上次出差时间

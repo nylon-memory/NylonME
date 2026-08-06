@@ -6,6 +6,7 @@ members = [
     "crates/nylon-vector",
     "crates/nylon-engine",
     "crates/nylon-storage",
+    "crates/nylon-engine",
 ]
 
 [workspace.package]
