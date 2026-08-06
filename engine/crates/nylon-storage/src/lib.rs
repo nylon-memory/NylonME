@@ -17,12 +17,13 @@ use nylon_graph::MemoryGraph;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+pub use wal::DurabilityTicket;
 use wal::{Wal, WalOp};
 
 pub const SNAPSHOT_FILE: &str = "graph.snp";
 const SNAPSHOT_MAGIC: &[u8; 4] = b"SNP0";
 
-/// 带持久化的记忆图：写路径 WAL-first，读路径直接走内存图。
+/// 带持久化的记忆图：写路径 WAL 先行（组提交批量刷盘），读路径直接走内存图。
 pub struct PersistentGraph {
     graph: MemoryGraph,
     wal: Wal,
@@ -35,8 +36,8 @@ impl PersistentGraph {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let mut graph = load_snapshot(&dir.join(SNAPSHOT_FILE))?;
-        let mut wal = Wal::open(&dir)?;
-        for op in wal.replay()? {
+        let (wal, ops) = Wal::open(&dir)?;
+        for op in ops {
             apply(&mut graph, op);
         }
         Ok(PersistentGraph { graph, wal, dir })
@@ -47,37 +48,40 @@ impl PersistentGraph {
         &self.graph
     }
 
-    /// 写入节点（WAL-first），返回分片内局部 ID。
-    pub fn add_node(&mut self, node: MemoryNode) -> io::Result<u32> {
+    /// 写入节点（WAL 先行入队），返回分片内局部 ID 与持久化票据。
+    pub fn add_node(&mut self, node: MemoryNode) -> io::Result<(u32, DurabilityTicket)> {
         let local = self.graph.peek_next_local_id();
-        self.wal.append(&WalOp::PutNode { id: local, node: node.clone() })?;
+        let ticket = self.wal.append(&WalOp::PutNode { id: local, node: node.clone() })?;
         self.graph.add_node_with_id(local, node);
-        Ok(local)
+        Ok((local, ticket))
     }
 
     /// 写入/更新边（WAL-first）。重复边视为权重更新，与内存图语义一致。
-    pub fn add_edge(&mut self, from: u32, to: u32, weight: f32) -> io::Result<()> {
-        self.wal.append(&WalOp::PutEdge { from, to, weight })?;
+    pub fn add_edge(&mut self, from: u32, to: u32, weight: f32) -> io::Result<DurabilityTicket> {
+        let ticket = self.wal.append(&WalOp::PutEdge { from, to, weight })?;
         self.graph.add_edge(from, to, weight);
-        Ok(())
+        Ok(ticket)
     }
 
     /// 更新节点（WAL-first）。节点不存在或已删除时返回 false。
-    pub fn update_node(&mut self, local_id: u32, node: MemoryNode) -> io::Result<bool> {
-        self.wal.append(&WalOp::UpdateNode { id: local_id, node: node.clone() })?;
-        Ok(self.graph.update_node(local_id, node))
+    pub fn update_node(&mut self, local_id: u32, node: MemoryNode) -> io::Result<(bool, DurabilityTicket)> {
+        let ticket = self.wal.append(&WalOp::UpdateNode { id: local_id, node: node.clone() })?;
+        let applied = self.graph.update_node(local_id, node);
+        Ok((applied, ticket))
     }
 
     /// 逻辑删除节点（WAL-first），物理清理由 compact() 完成。
-    pub fn remove_node(&mut self, local_id: u32) -> io::Result<bool> {
-        self.wal.append(&WalOp::RemoveNode { id: local_id })?;
-        Ok(self.graph.remove_node(local_id))
+    pub fn remove_node(&mut self, local_id: u32) -> io::Result<(bool, DurabilityTicket)> {
+        let ticket = self.wal.append(&WalOp::RemoveNode { id: local_id })?;
+        let applied = self.graph.remove_node(local_id);
+        Ok((applied, ticket))
     }
 
     /// 删除边（WAL-first）。
-    pub fn remove_edge(&mut self, from: u32, to: u32) -> io::Result<bool> {
-        self.wal.append(&WalOp::RemoveEdge { from, to })?;
-        Ok(self.graph.remove_edge(from, to))
+    pub fn remove_edge(&mut self, from: u32, to: u32) -> io::Result<(bool, DurabilityTicket)> {
+        let ticket = self.wal.append(&WalOp::RemoveEdge { from, to })?;
+        let applied = self.graph.remove_edge(from, to);
+        Ok((applied, ticket))
     }
 
     /// Delta 合并进 CSR（纯内存操作，不改变逻辑状态，无需记 WAL）。
@@ -245,8 +249,8 @@ mod tests {
         let dir = temp_dir("checkpoint");
         {
             let mut pg = PersistentGraph::open(&dir).unwrap();
-            let a = pg.add_node(node(1, "甲")).unwrap();
-            let b = pg.add_node(node(2, "乙")).unwrap();
+            let (a, _ticket_a) = pg.add_node(node(1, "甲")).unwrap();
+            let (b, _ticket_b) = pg.add_node(node(2, "乙")).unwrap();
             pg.add_edge(a, b, 0.9).unwrap();
             pg.checkpoint().unwrap();
         }
@@ -255,7 +259,7 @@ mod tests {
         assert_eq!(pg.graph().get_node(0).unwrap().filaments.fact, "甲");
         assert_eq!(pg.graph().edges(), vec![(0, 1, 0.9)]);
         // ID 单调：新节点应拿到 2 而不是复用 0
-        let c = pg.add_node(node(3, "丙")).unwrap();
+        let (c, _ticket_c) = pg.add_node(node(3, "丙")).unwrap();
         assert_eq!(c, 2);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -316,8 +320,8 @@ mod tests {
             pg.add_node(node(3, "也留")).unwrap();
             pg.add_edge(0, 1, 0.5).unwrap();
             pg.add_edge(0, 2, 0.7).unwrap();
-            assert!(pg.remove_node(1).unwrap());
-            assert!(pg.remove_edge(0, 2).unwrap());
+            assert!(pg.remove_node(1).unwrap().0);
+            assert!(pg.remove_edge(0, 2).unwrap().0);
             pg.checkpoint().unwrap();
         }
         let pg = PersistentGraph::open(&dir).unwrap();
@@ -338,7 +342,7 @@ mod tests {
             pg.add_edge(0, 1, 0.3).unwrap();
             let mut updated = node(1, "新事实");
             updated.filaments.confidence = 0.5;
-            assert!(pg.update_node(0, updated).unwrap());
+            assert!(pg.update_node(0, updated).unwrap().0);
             pg.add_edge(0, 1, 0.95).unwrap(); // 重复边 = 权重更新
             pg.checkpoint().unwrap();
         }

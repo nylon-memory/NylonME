@@ -115,11 +115,12 @@ impl MemoryEngine for EngineService {
         } else {
             None
         };
+        let (resp, final_ticket) = {
         let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
         if let Some(vec) = embedding {
             node.embedding = vec;
         }
-        let local = inner.store.add_node(node).map_err(|e| Status::internal(format!("wal append: {e}")))?;
+        let (local, node_ticket) = inner.store.add_node(node).map_err(|e| Status::internal(format!("wal append: {e}")))?;
         if !inner.store.graph().get_node(local).unwrap().embedding.is_empty() {
             let emb = inner.store.graph().get_node(local).unwrap().embedding.clone();
             inner.index.add(local, &emb);
@@ -127,28 +128,42 @@ impl MemoryEngine for EngineService {
 
         // 自动建边：同 owner 且关系丝重叠的存活历史节点
         let mut linked = Vec::new();
+        let mut edge_ticket = None;
         if !relations.is_empty() {
-            let candidates = inner.store.graph().find_by_filaments(&FilamentFilter {
-                relations_any: Some(relations.clone()),
-                ..Default::default()
-            });
-            for cand in candidates {
-                if cand == local || linked.len() >= MAX_AUTO_LINKS {
-                    continue;
-                }
-                let is_same_owner = inner
-                    .store
-                    .graph()
-                    .get_node(cand)
-                    .map(|n| n.owner_id == r.owner_id)
-                    .unwrap_or(false);
-                if is_same_owner {
-                    inner.store.add_edge(local, cand, AUTO_LINK_WEIGHT).map_err(|e| Status::internal(format!("wal append: {e}")))?;
-                    linked.push(cand as u64);
+            let mut picks: Vec<u32> = Vec::new();
+            // 关系丝倒排索引取候选，凑齐 MAX_AUTO_LINKS 条同 owner 边即停（免全图扫描）
+            'tags: for tag in &relations {
+                for cand in inner.store.graph().relation_candidates(tag) {
+                    if picks.len() >= MAX_AUTO_LINKS {
+                        break 'tags;
+                    }
+                    if cand == local || picks.contains(&cand) {
+                        continue;
+                    }
+                    let is_same_owner = inner
+                        .store
+                        .graph()
+                        .get_node(cand)
+                        .map(|n| n.owner_id == r.owner_id)
+                        .unwrap_or(false);
+                    if is_same_owner {
+                        picks.push(cand);
+                    }
                 }
             }
+            for cand in picks {
+                edge_ticket = Some(inner.store.add_edge(local, cand, AUTO_LINK_WEIGHT).map_err(|e| Status::internal(format!("wal append: {e}")))?);
+                linked.push(cand as u64);
+            }
         }
-        Ok(Response::new(WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes: vec![] }))
+            (WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes: vec![] }, edge_ticket.unwrap_or(node_ticket))
+        };
+        // group commit：刷盘等待移出全局锁，并发写共享同一批次 fsync
+        tokio::task::spawn_blocking(move || final_ticket.wait())
+            .await
+            .map_err(|e| Status::internal(format!("durability join: {e}")))?
+            .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
+        Ok(Response::new(resp))
     }
 
     async fn resonate(&self, req: Request<ResonateRequest>) -> Result<Response<ResonateResponse>, Status> {

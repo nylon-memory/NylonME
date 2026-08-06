@@ -109,8 +109,8 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir);
     {
         let mut pg = PersistentGraph::open(&dir).expect("open store");
-        let a = pg.add_node(demo_node(101, "持久化节点 A", &["演示"], 1)).unwrap();
-        let b = pg.add_node(demo_node(102, "持久化节点 B", &["演示"], 1)).unwrap();
+        let (a, _ticket_a) = pg.add_node(demo_node(101, "持久化节点 A", &["演示"], 1)).unwrap();
+        let (b, _ticket_b) = pg.add_node(demo_node(102, "持久化节点 B", &["演示"], 1)).unwrap();
         pg.add_edge(a, b, 0.9).unwrap();
         pg.checkpoint().unwrap();
         // checkpoint 后再写一条（只在 WAL 里），模拟未落快照的增量

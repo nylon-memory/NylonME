@@ -19,7 +19,7 @@ use std::time::Instant;
 const TOTAL: usize = 10_000;
 const WORKERS: usize = 32;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "基准测试，手动运行"]
 async fn weave_tps() {
     let dir = tempfile::tempdir().unwrap();
@@ -73,5 +73,5 @@ async fn weave_tps() {
     println!("=== Weave 写入吞吐基准 ===");
     println!("总量 {TOTAL} ops, 并发 {WORKERS}, 耗时 {:.2}s", elapsed.as_secs_f64());
     println!("端到端 TPS: {tps:.0} (目标 > 10000)");
-    println!("注: 每次写入含 WAL fsync 单条刷盘; group commit 属 Phase 2 优化");
+    println!("WAL group commit 已上线：刷盘批量合并，等待在阻塞线程池");
 }

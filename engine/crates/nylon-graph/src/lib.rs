@@ -164,6 +164,8 @@ pub struct MemoryGraph {
     next_local_id: u32,
     /// 节点墓碑：逻辑删除立即生效，物理清理由 compact() 完成。
     tombstones: HashSet<u32>,
+    /// 关系丝倒排索引：tag -> 存活节点 ID 集合，随增/删/改同步维护（写路径免全图扫描）。
+    rel_index: HashMap<String, HashSet<u32>>,
     /// CSR 中已删除边的墓碑（Delta 边直接物理移除，无需墓碑）。
     edge_tombstones: HashSet<(u32, u32)>,
 }
@@ -177,6 +179,7 @@ impl MemoryGraph {
     pub fn add_node(&mut self, node: MemoryNode) -> u32 {
         let local = self.next_local_id;
         self.next_local_id += 1;
+        Self::rel_index_insert(&mut self.rel_index, local, &node);
         self.nodes.insert(local, node);
         local
     }
@@ -201,7 +204,10 @@ impl MemoryGraph {
         }
         match self.nodes.get_mut(&local_id) {
             Some(slot) => {
-                *slot = node;
+                let old = std::mem::replace(slot, node);
+                Self::rel_index_remove(&mut self.rel_index, local_id, &old);
+                let cur = self.nodes.get(&local_id).expect("just replaced");
+                Self::rel_index_insert(&mut self.rel_index, local_id, cur);
                 true
             }
             None => false,
@@ -215,6 +221,9 @@ impl MemoryGraph {
             return false;
         }
         self.tombstones.insert(local_id);
+        if let Some(n) = self.nodes.get(&local_id) {
+            Self::rel_index_remove(&mut self.rel_index, local_id, n);
+        }
         if let Some(edges) = self.delta.adj.remove(&local_id) {
             self.delta.edge_count -= edges.len();
         }
@@ -272,6 +281,33 @@ impl MemoryGraph {
         found
     }
 
+    /// 关系丝倒排：某标签命中的存活节点（无序候选，供写路径早退遍历）。
+    /// 不复刻节点集；索引与墓碑同步维护，集合内仅存活节点。
+    pub fn relation_candidates(&self, tag: &str) -> impl Iterator<Item = u32> + '_ {
+        self.rel_index.get(tag).into_iter().flat_map(|set| set.iter().copied())
+    }
+
+    fn rel_index_insert(index: &mut HashMap<String, HashSet<u32>>, id: u32, node: &MemoryNode) {
+        for tag in &node.filaments.relations {
+            index.entry(tag.clone()).or_default().insert(id);
+        }
+    }
+
+    fn rel_index_remove(index: &mut HashMap<String, HashSet<u32>>, id: u32, node: &MemoryNode) {
+        let mut emptied: Vec<String> = Vec::new();
+        for tag in &node.filaments.relations {
+            if let Some(set) = index.get_mut(tag) {
+                set.remove(&id);
+                if set.is_empty() {
+                    emptied.push(tag.clone());
+                }
+            }
+        }
+        for tag in emptied {
+            index.remove(&tag);
+        }
+    }
+
     /// 六丝组合检索：多条件 AND 组合，排除墓碑节点，结果按局部 ID 升序。
     /// 空过滤器返回全部存活节点。
     pub fn find_by_filaments(&self, filter: &FilamentFilter) -> Vec<u32> {
@@ -299,6 +335,10 @@ impl MemoryGraph {
 
     /// 供持久化层 WAL 重放使用：以指定局部 ID 写入节点，并推进 ID 分配器。
     pub fn add_node_with_id(&mut self, local_id: u32, node: MemoryNode) {
+        if let Some(old) = self.nodes.get(&local_id) {
+            Self::rel_index_remove(&mut self.rel_index, local_id, old);
+        }
+        Self::rel_index_insert(&mut self.rel_index, local_id, &node);
         self.nodes.insert(local_id, node);
         self.tombstones.remove(&local_id);
         self.next_local_id = self.next_local_id.max(local_id + 1);
