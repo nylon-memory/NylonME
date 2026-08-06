@@ -10,6 +10,8 @@ nylon-core = { path = "../nylon-core" }
 nylon-graph = { path = "../nylon-graph" }
 nylon-vector = { path = "../nylon-vector" }
 nylon-storage = { path = "../nylon-storage" }
+nylon-embed = { path = "../nylon-embed" }
+async-trait = "0.1"
 tonic = "0.14"
 tonic-prost = "0.14"
 prost = "0.14"

@@ -7,6 +7,7 @@ members = [
     "crates/nylon-engine",
     "crates/nylon-storage",
     "crates/nylon-engine",
+    "crates/nylon-embed",
 ]
 
 [workspace.package]

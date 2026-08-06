@@ -12,7 +12,7 @@ use service::EngineService;
 async fn start() -> (String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = PersistentGraph::open(dir.path()).unwrap();
-    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS);
+    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -88,4 +88,51 @@ async fn grpc_roundtrip() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+/// Phase 2 语义通道：Stub 嵌入器下，Search 应有结果，无词面重叠的 query 也能靠向量种子共振。
+#[tokio::test]
+async fn grpc_with_stub_embedder() {
+    use nylon_embed::{Embedder, StubEmbedder};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = PersistentGraph::open(dir.path()).unwrap();
+    let svc = EngineService::new(store, 32, Some(Arc::new(StubEmbedder::new(32))));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(MemoryEngineServer::new(svc))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut client = MemoryEngineClient::connect(addr).await.unwrap();
+
+    client.weave(WeaveRequest {
+        tenant_id: "t1".into(), owner_id: "bob".into(),
+        raw_event: "我去上海出差订了机票".into(), context: None,
+    }).await.unwrap();
+    client.weave(WeaveRequest {
+        tenant_id: "t1".into(), owner_id: "bob".into(),
+        raw_event: "周末在家读完了三体".into(), context: None,
+    }).await.unwrap();
+
+    // Search：用 Stub 嵌入"出差 航班 机票"查询，应命中机票节点
+    let q = StubEmbedder::new(32).embed(&["出差 航班 机票".to_string()]).await.unwrap().pop().unwrap();
+    let bytes: Vec<u8> = q.iter().flat_map(|f| f.to_le_bytes()).collect();
+    let resp = client.search(SearchRequest {
+        tenant_id: "t1".into(), owner_id: "bob".into(),
+        query_embedding: bytes, top_k: 5,
+    }).await.unwrap().into_inner();
+    assert!(!resp.neighbors.is_empty(), "语义通道下 Search 应有结果");
+    assert_eq!(resp.neighbors[0].node_id, 0, "机票节点应排第一: {:?}", resp.neighbors);
+
+    // Resonate：query 用词面重叠为零的表达，向量种子应兜住
+    let res = client.resonate(ResonateRequest {
+        tenant_id: "t1".into(), owner_id: "bob".into(),
+        query: "航班".into(), context: None, budget: 8,
+    }).await.unwrap().into_inner();
+    assert!(!res.activated.is_empty(), "向量种子应激活节点: {:?}", res.activated);
 }

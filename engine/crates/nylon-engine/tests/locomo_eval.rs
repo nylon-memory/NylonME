@@ -36,7 +36,7 @@ async fn locomo_evidence_recall() {
     // 内存端口起服务
     let dir = tempfile::tempdir().unwrap();
     let store = PersistentGraph::open(dir.path()).unwrap();
-    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS);
+    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

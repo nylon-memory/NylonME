@@ -9,6 +9,8 @@
 //! - Search 走 HNSW，查询向量逐维度截断/补零到索引维度。
 
 use nylon_core::{compute_tension, Filaments, MemoryNode, Tension};
+use nylon_embed::Embedder;
+use std::sync::Arc;
 use nylon_graph::{ContextSpectrum, FilamentFilter};
 use nylon_storage::PersistentGraph;
 use nylon_vector::{HnswIndex, VectorIndex};
@@ -68,11 +70,13 @@ struct Inner {
 /// MemoryEngine 服务句柄（内部状态互斥保护，Phase 1 单写者够用）。
 pub struct EngineService {
     inner: Mutex<Inner>,
+    /// 嵌入通道：None 时退回 Phase 1 行为（无向量写入、无向量种子）。
+    embedder: Option<Arc<dyn Embedder>>,
 }
 
 impl EngineService {
-    pub fn new(store: PersistentGraph, embed_dims: usize) -> Self {
-        EngineService { inner: Mutex::new(Inner { store, index: HnswIndex::new(embed_dims) }) }
+    pub fn new(store: PersistentGraph, embed_dims: usize, embedder: Option<Arc<dyn Embedder>>) -> Self {
+        EngineService { inner: Mutex::new(Inner { store, index: HnswIndex::new(embed_dims) }), embedder }
     }
 }
 
@@ -83,11 +87,10 @@ impl MemoryEngine for EngineService {
         if r.tenant_id.is_empty() || r.owner_id.is_empty() || r.raw_event.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id / raw_event 均不能为空"));
         }
-        let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
         let now = now_secs();
         let ctx = to_context(r.context);
         let relations: Vec<String> = ctx.task.clone().into_iter().collect();
-        let node = MemoryNode {
+        let mut node = MemoryNode {
             id: 0, // 全局 ID 分配在 Phase 2 接入；node_id 暂用局部 ID
             owner_id: r.owner_id.clone(),
             filaments: Filaments {
@@ -103,7 +106,24 @@ impl MemoryEngine for EngineService {
             tension: Tension { baseline: 1.0, last_updated: now },
             embedding: Vec::new(),
         };
+        // 嵌入通道（锁外计算，避免持锁等网络）
+        let embedding = if let Some(emb) = &self.embedder {
+            match emb.embed(std::slice::from_ref(&r.raw_event)).await {
+                Ok(mut v) => v.pop(),
+                Err(e) => return Err(Status::internal(format!("嵌入失败: {e}"))),
+            }
+        } else {
+            None
+        };
+        let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
+        if let Some(vec) = embedding {
+            node.embedding = vec;
+        }
         let local = inner.store.add_node(node).map_err(|e| Status::internal(format!("wal append: {e}")))?;
+        if !inner.store.graph().get_node(local).unwrap().embedding.is_empty() {
+            let emb = inner.store.graph().get_node(local).unwrap().embedding.clone();
+            inner.index.add(local, &emb);
+        }
 
         // 自动建边：同 owner 且关系丝重叠的存活历史节点
         let mut linked = Vec::new();
@@ -136,10 +156,22 @@ impl MemoryEngine for EngineService {
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 不能为空"));
         }
-        let inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
-        let g = inner.store.graph();
         let ctx = to_context(r.context);
         let query = r.query.to_lowercase();
+        // 向量种子（锁外计算）
+        let vec_seeds: Vec<u32> = if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
+            match emb.embed(std::slice::from_ref(&r.query)).await {
+                Ok(v) => {
+                    let inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
+                    inner.index.search(&v[0], MAX_SEEDS).into_iter().map(|(id, _)| id).collect()
+                }
+                Err(_) => Vec::new(), // 嵌入服务故障时降级为纯词面
+            }
+        } else {
+            Vec::new()
+        };
+        let inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
+        let g = inner.store.graph();
 
         // 种子选择：query 词项重叠打分（完整子串命中加权） > task 命中关系丝 > 最近节点兜底。
         // 词项化按非字母数字切分；CJK 查询无空格时退化为整串 contains，行为与原先一致。
@@ -163,6 +195,12 @@ impl MemoryEngine for EngineService {
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
             seeds = scored.into_iter().map(|(id, _)| id).collect();
+        }
+        // 融合向量种子：去重后并入（词面优先）
+        for id in vec_seeds {
+            if !seeds.contains(&id) {
+                seeds.push(id);
+            }
         }
         if seeds.is_empty() {
             if let Some(task) = &ctx.task {

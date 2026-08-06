@@ -1,0 +1,15 @@
+[package]
+name = "nylon-embed"
+description = "嵌入向量接入层：OpenAI 兼容 HTTP 后端 + 确定性 Stub（离线开发/测试）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
