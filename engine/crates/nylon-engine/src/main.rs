@@ -3,6 +3,7 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+use nylon_storage::PersistentGraph;
 use nylon_vector::{BruteForceIndex, VectorIndex};
 
 fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNode {
@@ -74,5 +75,27 @@ fn main() {
     println!("六丝检索（出差 + 置信>=0.5）: 命中 {} 个节点 {:?}", hits.len(), hits);
     assert_eq!(hits.len(), 4);
 
-    println!("\n自检通过：图遍历 + 张力 + 向量检索 + .nylon 编解码 + 六丝检索基线可用。");
+    // 持久化演示：WAL + 快照 + 崩溃恢复
+    let dir = std::env::temp_dir().join("nylon-engine-demo");
+    let _ = std::fs::remove_dir_all(&dir);
+    {
+        let mut pg = PersistentGraph::open(&dir).expect("open store");
+        let a = pg.add_node(demo_node(101, "持久化节点 A", &["演示"], 1)).unwrap();
+        let b = pg.add_node(demo_node(102, "持久化节点 B", &["演示"], 1)).unwrap();
+        pg.add_edge(a, b, 0.9).unwrap();
+        pg.checkpoint().unwrap();
+        // checkpoint 后再写一条（只在 WAL 里），模拟未落快照的增量
+        pg.add_node(demo_node(103, "持久化节点 C（仅 WAL）", &["演示"], 0)).unwrap();
+    } // drop = 模拟进程退出
+    let pg = PersistentGraph::open(&dir).expect("reopen store");
+    assert_eq!(pg.graph().node_count(), 3, "快照 + WAL 重放应恢复全部 3 个节点");
+    let c = pg.graph().get_node(2).expect("节点 C 应由 WAL 重放恢复");
+    println!(
+        "\n持久化: checkpoint + WAL 重放恢复 {} 节点, 仅 WAL 节点: {}",
+        pg.graph().node_count(),
+        c.filaments.fact
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    println!("\n自检通过：图遍历 + 张力 + 向量检索 + .nylon 编解码 + 六丝检索 + 持久化基线可用。");
 }

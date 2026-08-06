@@ -297,6 +297,60 @@ impl MemoryGraph {
         self.nodes.len() - self.tombstones.len()
     }
 
+    /// 供持久化层 WAL 重放使用：以指定局部 ID 写入节点，并推进 ID 分配器。
+    pub fn add_node_with_id(&mut self, local_id: u32, node: MemoryNode) {
+        self.nodes.insert(local_id, node);
+        self.tombstones.remove(&local_id);
+        self.next_local_id = self.next_local_id.max(local_id + 1);
+    }
+
+    /// 供持久化层恢复快照使用：ID 分配器必须越过已物理删除的尾部 ID，保持单调不复用。
+    pub fn restore_next_local_id(&mut self, next: u32) {
+        self.next_local_id = self.next_local_id.max(next);
+    }
+
+    /// 下一个待分配的局部 ID（快照需记录以在恢复后保持 ID 单调）。
+    pub fn peek_next_local_id(&self) -> u32 {
+        self.next_local_id
+    }
+
+    /// 全部存活节点迭代（供快照落盘）。
+    pub fn live_nodes(&self) -> impl Iterator<Item = (u32, &MemoryNode)> + '_ {
+        self.nodes
+            .iter()
+            .filter(|(id, _)| !self.tombstones.contains(id))
+            .map(|(&id, n)| (id, n))
+    }
+
+    /// 合并视图下的全部存活边（Delta 优先去重，排除墓碑节点/边），供快照落盘。
+    pub fn edges(&self) -> Vec<(u32, u32, f32)> {
+        let mut merged: HashMap<(u32, u32), f32> = HashMap::new();
+        for src in 0..self.next_local_id {
+            if self.tombstones.contains(&src) {
+                continue;
+            }
+            if (src as usize) + 1 < self.csr.offsets.len() {
+                for (t, w) in self.csr.neighbors(src) {
+                    if self.tombstones.contains(&t) || self.edge_tombstones.contains(&(src, t)) {
+                        continue;
+                    }
+                    merged.insert((src, t), w);
+                }
+            }
+        }
+        for (&src, list) in &self.delta.adj {
+            if self.tombstones.contains(&src) {
+                continue;
+            }
+            for &(t, w) in list {
+                if !self.tombstones.contains(&t) {
+                    merged.insert((src, t), w);
+                }
+            }
+        }
+        merged.into_iter().map(|((s, t), w)| (s, t, w)).collect()
+    }
+
     /// 按关系丝标签过滤，返回命中的局部 ID（升序，已删除节点除外）。
     pub fn find_by_relation(&self, tag: &str) -> Vec<u32> {
         let mut out: Vec<u32> = self

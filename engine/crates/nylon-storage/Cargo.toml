@@ -1,6 +1,6 @@
 [package]
-name = "nylon-engine"
-description = "尼龙记忆引擎可执行入口"
+name = "nylon-storage"
+description = "嵌入式持久化层：WAL 预写日志 + 快照 + 崩溃恢复"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,5 +8,3 @@ license.workspace = true
 [dependencies]
 nylon-core = { path = "../nylon-core" }
 nylon-graph = { path = "../nylon-graph" }
-nylon-vector = { path = "../nylon-vector" }
-nylon-storage = { path = "../nylon-storage" }

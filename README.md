@@ -1,4 +1,4 @@
-# Nylon — A Memory Engine for AI Agents
+# NylonMem — A Memory Engine for AI Agents
 
 [简体中文](README.zh-CN.md) | English
 
