@@ -32,6 +32,8 @@ use pb::{
 pub const DEFAULT_EMBED_DIMS: usize = 384;
 /// Resonate 种子数量上限。
 const MAX_SEEDS: usize = 8;
+/// 向量种子保底名额：语义通道的召回兜底，防止被词面种子挤占。
+const VEC_SEED_QUOTA: usize = 4;
 /// Weave 自动建边上限。
 const MAX_AUTO_LINKS: usize = 3;
 /// 自动建边权重（Phase 1 固定值，后续由相似度决定）。
@@ -190,7 +192,7 @@ impl MemoryEngine for EngineService {
 
         // 种子选择：query 词项重叠打分（完整子串命中加权） > task 命中关系丝 > 最近节点兜底。
         // 词项化按非字母数字切分；CJK 查询无空格时退化为整串 contains，行为与原先一致。
-        let mut seeds: Vec<u32> = Vec::new();
+        let mut lex_seeds: Vec<u32> = Vec::new();
         if !query.is_empty() {
             let terms: Vec<&str> = query
                 .split(|c: char| !c.is_alphanumeric())
@@ -209,10 +211,18 @@ impl MemoryEngine for EngineService {
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            seeds = scored.into_iter().map(|(id, _)| id).collect();
+            lex_seeds = scored.into_iter().map(|(id, _)| id).collect();
         }
         // 融合向量种子：去重后并入（词面优先）
-        for id in vec_seeds {
+        // 融合：向量种子保底 VEC_SEED_QUOTA 个名额，词面种子去重补满
+        let mut seeds: Vec<u32> = Vec::new();
+        for id in vec_seeds.into_iter().take(VEC_SEED_QUOTA) {
+            seeds.push(id);
+        }
+        for id in lex_seeds {
+            if seeds.len() >= MAX_SEEDS {
+                break;
+            }
             if !seeds.contains(&id) {
                 seeds.push(id);
             }

@@ -5,6 +5,7 @@
 //! 用法：
 //!   $env:NYLON_LOCOMO_PATH="D:\data\locomo10.json"
 //!   cargo test --release -p nylon-engine --test locomo_eval -- --ignored --nocapture
+//! 语义口径：再加 NYLON_EMBED_URL / NYLON_EMBED_MODEL / NYLON_EMBED_DIMS（如本地 ollama bge-m3）
 //!
 //! 口径说明：Phase 1 的 Resonate 种子是词面检索（嵌入模型未接入），本评测度量
 //! 检索/激活层的证据召回率，不是端到端 QA 准确率（后者需要 LLM 生成 + 裁判）。
@@ -36,7 +37,18 @@ async fn locomo_evidence_recall() {
     // 内存端口起服务
     let dir = tempfile::tempdir().unwrap();
     let store = PersistentGraph::open(dir.path()).unwrap();
-    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS, None);
+    let dims: usize = std::env::var("NYLON_EMBED_DIMS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(service::DEFAULT_EMBED_DIMS);
+    let embedder = nylon_embed::embedder_from_env(dims);
+    let embedder_on = embedder.is_some();
+    if embedder_on {
+        println!("[eval] 嵌入通道已启用 (NYLON_EMBED_URL), dims={dims}");
+    } else {
+        println!("[eval] 未配置 NYLON_EMBED_URL，走纯词面口径 (dims={dims})");
+    }
+    let svc = EngineService::new(store, dims, embedder);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -135,7 +147,7 @@ async fn locomo_evidence_recall() {
     }
 
     println!();
-    println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, 词面检索口径） ===");
+    println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, {} 口径） ===", if embedder_on { "词面+向量融合" } else { "纯词面" });
     println!("会话数: {limit}, 织入轮次: {total_turns}");
     if total > 0 {
         println!("有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%", hit as f64 / total as f64 * 100.0);
