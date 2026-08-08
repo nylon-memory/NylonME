@@ -14,6 +14,7 @@
 #[path = "../src/service.rs"]
 mod service;
 
+use nylon_llm::llm_from_env;
 use nylon_storage::PersistentGraph;
 use service::pb::memory_engine_client::MemoryEngineClient;
 use service::pb::memory_engine_server::MemoryEngineServer;
@@ -43,12 +44,24 @@ async fn locomo_evidence_recall() {
         .unwrap_or(service::DEFAULT_EMBED_DIMS);
     let embedder = nylon_embed::embedder_from_env(dims);
     let embedder_on = embedder.is_some();
+    let llm = llm_from_env();
+    let llm_on = llm.is_some();
     if embedder_on {
         println!("[eval] 嵌入通道已启用 (NYLON_EMBED_URL), dims={dims}");
+    if llm_on {
+        println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
+    } else {
+        println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
+    }
     } else {
         println!("[eval] 未配置 NYLON_EMBED_URL，走纯词面口径 (dims={dims})");
+    if llm_on {
+        println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
+    } else {
+        println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
     }
-    let svc = EngineService::new(store, dims, embedder, None);
+    }
+    let svc = EngineService::new(store, dims, embedder, llm);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

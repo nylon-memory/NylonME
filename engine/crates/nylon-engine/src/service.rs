@@ -86,6 +86,30 @@ impl EngineService {
 }
 
 
+/// LLM weave decomposition: extract six-filament structure from raw event.
+/// Returns None when LLM unavailable/fails, caller falls back to heuristic decomposition.
+async fn decompose(llm: &dyn ChatModel, raw_event: &str) -> Option<(String, Vec<String>, f32, f32, f32)> {
+    let system = "You are a memory extraction engine. Given a raw event or statement, extract structured memory filaments. Output ONLY valid JSON with: fact (concise factual statement preserving key details), relations (array of topic tags e.g. [\"travel\", \"food\"]), emotion_valence (float -1.0 to 1.0, negative=unpleasant), emotion_intensity (float 0.0 to 1.0), confidence (float 0.0 to 1.0).";
+    let user = format!("Raw event: {raw_event}");
+    match llm.chat_json(system, &user).await {
+        Ok(v) => {
+            let fact = v.get("fact").and_then(|f| f.as_str()).unwrap_or(raw_event).to_string();
+            let relations: Vec<String> = v.get("relations")
+                .and_then(|r| r.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let valence = v.get("emotion_valence").and_then(|f| f.as_f64()).map(|f| f as f32).unwrap_or(0.0)
+                .clamp(-1.0, 1.0);
+            let intensity = v.get("emotion_intensity").and_then(|f| f.as_f64()).map(|f| f as f32).unwrap_or(0.5)
+                .clamp(0.0, 1.0);
+            let confidence = v.get("confidence").and_then(|f| f.as_f64()).map(|f| f as f32).unwrap_or(0.8)
+                .clamp(0.0, 1.0);
+            Some((fact, relations, valence, intensity, confidence))
+        }
+        Err(_) => None,
+    }
+}
+
 /// LLM conflict detection: compare new memory against candidate existing memories.
 /// Returns node_ids of candidates that have factual contradictions.
 async fn judge_conflicts(llm: &dyn ChatModel, new_fact: &str, candidates: &[(u32, String)]) -> Vec<u64> {
@@ -124,32 +148,41 @@ impl MemoryEngine for EngineService {
         }
         let now = now_secs();
         let ctx = to_context(r.context);
-        let relations: Vec<String> = ctx.task.clone().into_iter().collect();
-        let mut node = MemoryNode {
-            id: 0, // 全局 ID 分配在 Phase 2 接入；node_id 暂用局部 ID
-            owner_id: r.owner_id.clone(),
-            filaments: Filaments {
-                fact: r.raw_event.clone(),
-                emotion_valence: ctx.emotion_valence.unwrap_or(0.0),
-                emotion_intensity: 0.5,
-                created_at: now,
-                decay_rate: 0.01,
-                relations: relations.clone(),
-                confidence: 0.8,
-                mentions_7d: 1,
-            },
-            tension: Tension { baseline: 1.0, last_updated: now },
-            embedding: Vec::new(),
+        let (fact, relations, emotion_valence, emotion_intensity, confidence) = if let Some(llm) = &self.llm {
+            decompose(llm.as_ref(), &r.raw_event).await.unwrap_or_else(|| {
+                let rels: Vec<String> = ctx.task.clone().into_iter().collect();
+                (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
+            })
+        } else {
+            let rels: Vec<String> = ctx.task.clone().into_iter().collect();
+            (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
         };
-        // 嵌入通道（锁外计算，避免持锁等网络）
+        // Embed the decomposed fact before moving it into the node
         let embedding = if let Some(emb) = &self.embedder {
-            match emb.embed(std::slice::from_ref(&r.raw_event)).await {
+            match emb.embed(std::slice::from_ref(&fact)).await {
                 Ok(mut v) => v.pop(),
                 Err(e) => return Err(Status::internal(format!("嵌入失败: {e}"))),
             }
         } else {
             None
         };
+        let mut node = MemoryNode {
+            id: 0, // 全局 ID 分配在 Phase 2 接入；node_id 暂用局部 ID
+            owner_id: r.owner_id.clone(),
+            filaments: Filaments {
+                fact,
+                emotion_valence,
+                emotion_intensity,
+                created_at: now,
+                decay_rate: 0.01,
+                relations: relations.clone(),
+                confidence,
+                mentions_7d: 1,
+            },
+            tension: Tension { baseline: 1.0, last_updated: now },
+            embedding: Vec::new(),
+        };
+        // REMOVED_DUPLICATE（锁外计算，避免持锁等网络）
         let llm = self.llm.clone();
         let (local, linked, final_ticket, candidate_facts) = {
         let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
