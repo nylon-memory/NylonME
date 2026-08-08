@@ -10,6 +10,7 @@
 
 use nylon_core::{compute_tension, Filaments, MemoryNode, Tension};
 use nylon_embed::Embedder;
+use nylon_llm::ChatModel;
 use std::sync::Arc;
 use nylon_graph::{ContextSpectrum, FilamentFilter};
 use nylon_storage::PersistentGraph;
@@ -74,11 +75,43 @@ pub struct EngineService {
     inner: Mutex<Inner>,
     /// 嵌入通道：None 时退回 Phase 1 行为（无向量写入、无向量种子）。
     embedder: Option<Arc<dyn Embedder>>,
+    /// LLM ch: None shi guan bi bian zhi fen jie yu chong tu jian ce.
+    llm: Option<Arc<dyn ChatModel>>,
 }
 
 impl EngineService {
-    pub fn new(store: PersistentGraph, embed_dims: usize, embedder: Option<Arc<dyn Embedder>>) -> Self {
-        EngineService { inner: Mutex::new(Inner { store, index: HnswIndex::new(embed_dims) }), embedder }
+    pub fn new(store: PersistentGraph, embed_dims: usize, embedder: Option<Arc<dyn Embedder>>, llm: Option<Arc<dyn ChatModel>>) -> Self {
+        EngineService { inner: Mutex::new(Inner { store, index: HnswIndex::new(embed_dims) }), embedder, llm }
+    }
+}
+
+
+/// LLM conflict detection: compare new memory against candidate existing memories.
+/// Returns node_ids of candidates that have factual contradictions.
+async fn judge_conflicts(llm: &dyn ChatModel, new_fact: &str, candidates: &[(u32, String)]) -> Vec<u64> {
+    use std::fmt::Write;
+    let mut user = String::from("New memory:\n");
+    user.push_str(new_fact);
+    user.push_str("\n\nCandidate existing memories:\n");
+    for (i, (_, fact)) in candidates.iter().enumerate() {
+        let _ = write!(&mut user, "{}. {}\n", i + 1, fact);
+    }
+    let system = "You are a memory conflict detector. Compare the new memory against the candidate existing memories. Only return candidates that have factual contradictions (not supplements, not related-but-different). Output JSON: {\x22conflicts\x22: [candidate_numbers]}";
+    match llm.chat_json(system, &user).await {
+        Ok(v) => {
+            let mut out = Vec::new();
+            if let Some(arr) = v.get("conflicts").and_then(|v| v.as_array()) {
+                for idx in arr {
+                    if let Some(i) = idx.as_u64() {
+                        if i >= 1 && i <= candidates.len() as u64 {
+                            out.push(candidates[i as usize - 1].0 as u64);
+                        }
+                    }
+                }
+            }
+            out
+        }
+        Err(_) => Vec::new(),
     }
 }
 
@@ -117,7 +150,8 @@ impl MemoryEngine for EngineService {
         } else {
             None
         };
-        let (resp, final_ticket) = {
+        let llm = self.llm.clone();
+        let (local, linked, final_ticket, candidate_facts) = {
         let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
         if let Some(vec) = embedding {
             node.embedding = vec;
@@ -158,8 +192,32 @@ impl MemoryEngine for EngineService {
                 linked.push(cand as u64);
             }
         }
-            (WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes: vec![] }, edge_ticket.unwrap_or(node_ticket))
+            let mut candidates: Vec<(u32, String)> = Vec::new();
+            if !inner.store.graph().get_node(local).unwrap().embedding.is_empty() {
+                let emb = inner.store.graph().get_node(local).unwrap().embedding.clone();
+                for (cid, _) in inner.index.search(&emb, 8) {
+                    if cid == local { continue; }
+                    if candidates.len() >= 4 { break; }
+                    if let Some(cn) = inner.store.graph().get_node(cid) {
+                        if cn.owner_id == r.owner_id {
+                            candidates.push((cid, cn.filaments.fact.clone()));
+                        }
+                    }
+                }
+            }
+            (local, linked, edge_ticket.unwrap_or(node_ticket), candidates)
         };
+        let conflict_nodes: Vec<u64> = if let Some(llm) = &llm {
+            if !candidate_facts.is_empty() {
+                judge_conflicts(llm.as_ref(), &r.raw_event, &candidate_facts).await
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let resp = WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes };
+        let final_ticket = final_ticket;
         // group commit：刷盘等待移出全局锁，并发写共享同一批次 fsync
         tokio::task::spawn_blocking(move || final_ticket.wait())
             .await
@@ -299,3 +357,45 @@ impl MemoryEngine for EngineService {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nylon_embed::StubEmbedder;
+    use nylon_llm::StubChatModel;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn weave_with_stub_llm_no_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PersistentGraph::open(dir.path()).unwrap();
+        let embedder = Arc::new(StubEmbedder::new(64));
+        let llm = Arc::new(StubChatModel::new(serde_json::json!({"conflicts": [1]})));
+
+        let svc = EngineService::new(store, 64, Some(embedder.clone()), Some(llm.clone()));
+
+        // First weave: no candidates, no conflicts
+        let req = WeaveRequest {
+            tenant_id: "test".into(),
+            owner_id: "alice".into(),
+            raw_event: "I like coffee".into(),
+            context: None,
+        };
+        let resp = svc.weave(tonic::Request::new(req)).await.unwrap();
+        let body = resp.into_inner();
+        assert!(body.conflict_nodes.is_empty());
+        assert!(body.linked_nodes.is_empty());
+
+        // Second weave: similar topic, HNSW may find candidate
+        let req2 = WeaveRequest {
+            tenant_id: "test".into(),
+            owner_id: "alice".into(),
+            raw_event: "I prefer tea over coffee".into(),
+            context: None,
+        };
+        let resp2 = svc.weave(tonic::Request::new(req2)).await.unwrap();
+        let body2 = resp2.into_inner();
+        assert!(body2.node_id > 0);
+    }
+}
+

@@ -48,7 +48,7 @@ async fn locomo_evidence_recall() {
     } else {
         println!("[eval] 未配置 NYLON_EMBED_URL，走纯词面口径 (dims={dims})");
     }
-    let svc = EngineService::new(store, dims, embedder);
+    let svc = EngineService::new(store, dims, embedder, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

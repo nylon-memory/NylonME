@@ -12,7 +12,7 @@ use service::EngineService;
 async fn start() -> (String, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = PersistentGraph::open(dir.path()).unwrap();
-    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS, None);
+    let svc = EngineService::new(store, service::DEFAULT_EMBED_DIMS, None, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -98,7 +98,7 @@ async fn grpc_with_stub_embedder() {
 
     let dir = tempfile::tempdir().unwrap();
     let store = PersistentGraph::open(dir.path()).unwrap();
-    let svc = EngineService::new(store, 32, Some(Arc::new(StubEmbedder::new(32))));
+    let svc = EngineService::new(store, 32, Some(Arc::new(StubEmbedder::new(32))), None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {

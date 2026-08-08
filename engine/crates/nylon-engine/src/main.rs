@@ -39,11 +39,12 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
             let store = PersistentGraph::open(&data).expect("open persistent store");
-            let embedder = nylon_embed::embedder_from_env(dims);
+                let llm = nylon_llm::llm_from_env();
+    let embedder = nylon_embed::embedder_from_env(dims);
             if embedder.is_some() {
                 println!("嵌入通道已启用 (NYLON_EMBED_URL)");
             }
-            let svc = service::EngineService::new(store, dims, embedder);
+            let svc = service::EngineService::new(store, dims, embedder, llm);
             let sock = addr.parse().expect("invalid listen addr");
             println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
             tonic::transport::Server::builder()

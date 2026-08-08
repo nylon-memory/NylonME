@@ -729,6 +729,7 @@ dependencies = [
  "nylon-core",
  "nylon-embed",
  "nylon-graph",
+ "nylon-llm",
  "nylon-storage",
  "nylon-vector",
  "prost",
@@ -747,6 +748,17 @@ name = "nylon-graph"
 version = "0.1.0"
 dependencies = [
  "nylon-core",
+]
+
+[[package]]
+name = "nylon-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
