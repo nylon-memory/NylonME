@@ -146,7 +146,10 @@ async fn decompose(llm: &dyn ChatModel, raw_event: &str) -> Option<(String, Vec<
                 .clamp(0.0, 1.0);
             Some((fact, relations, valence, intensity, confidence))
         }
-        Err(_) => None,
+        Err(e) => {
+            eprintln!("[weave] LLM decompose 调用失败，回退启发式: {e}");
+            None
+        }
     }
 }
 
@@ -175,7 +178,10 @@ async fn judge_conflicts(llm: &dyn ChatModel, new_fact: &str, candidates: &[(u32
             }
             out
         }
-        Err(_) => Vec::new(),
+        Err(e) => {
+            eprintln!("[weave] LLM 冲突检测调用失败，按无冲突处理: {e}");
+            Vec::new()
+        }
     }
 }
 

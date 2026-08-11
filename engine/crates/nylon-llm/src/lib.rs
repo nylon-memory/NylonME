@@ -41,6 +41,8 @@ struct ChatReq<'a> {
     response_format: RespFmt<'a>,
     temperature: f32,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Thinking<'a>>,
 }
 #[derive(serde::Serialize)]
 struct Msg<'a> {
@@ -52,6 +54,12 @@ struct RespFmt<'a> {
     #[serde(rename = "type")]
     kind: &'a str,
 }
+#[derive(serde::Serialize)]
+struct Thinking<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+}
+
 #[derive(serde::Deserialize)]
 struct ChatResp {
     choices: Vec<Choice>,
@@ -89,7 +97,7 @@ fn parse_json_loose(text: &str) -> Result<serde_json::Value, LlmError> {
             }
         }
     }
-    Err(LlmError(format!("响应不是 JSON: {}", &t[..t.len().min(120)])))
+    Err(LlmError(format!("响应不是 JSON: {}", &t[t.len().saturating_sub(200)..])))
 }
 
 #[async_trait::async_trait]
@@ -100,7 +108,13 @@ impl ChatModel for HttpChatModel {
             messages: [Msg { role: "system", content: system }, Msg { role: "user", content: user }],
             response_format: RespFmt { kind: "json_object" },
             temperature: 0.0,
-            max_tokens: 512,
+            max_tokens: 1536,
+            // NYLON_LLM_THINKING_OFF=1 时请求关闭推理（deepseek-v4-flash 等推理模型会烧光 token 预算导致 JSON 截断）
+            thinking: if std::env::var("NYLON_LLM_THINKING_OFF").is_ok() {
+                Some(Thinking { kind: "disabled" })
+            } else {
+                None
+            },
         };
         let mut rb = self.client.post(&self.url).json(&req);
         if let Some(key) = &self.api_key {

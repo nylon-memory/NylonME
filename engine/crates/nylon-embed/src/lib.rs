@@ -55,7 +55,10 @@ impl HttpEmbedder {
     /// url 为端点根（如 http://127.0.0.1:8080），内部拼 /v1/embeddings。
     pub fn new(url: impl Into<String>, model: impl Into<String>, dims: usize, api_key: Option<String>) -> Self {
         HttpEmbedder {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             url: url.into(),
             model: model.into(),
             api_key,

@@ -125,6 +125,9 @@ async fn locomo_evidence_recall() {
                     .into_inner();
                 dia2node.insert(dia, resp.node_id);
                 total_turns += 1;
+                if total_turns % 20 == 0 {
+                    println!("[eval] weave 进度 {total_turns} 轮");
+                }
             }
         }
 
