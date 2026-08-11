@@ -126,13 +126,13 @@ async fn locomo_evidence_recall() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
     // Cat4 ablation：NYLON_CAT4_MAX_HOPS=0 时 Cat4 查询仅返回种子（不扩散）
-    let cat4_hops: Option<u32> = std::env::var("NYLON_CAT4_MAX_HOPS")
-        .ok()
-        .and_then(|v| v.parse().ok());
-    // 全局联想深度：NYLON_MAX_HOPS=0 即纯种子精准召回模式
-    let all_hops: Option<u32> = std::env::var("NYLON_MAX_HOPS")
-        .ok()
-        .and_then(|v| v.parse().ok());
+    // 按类别联想深度：NYLON_CAT{n}_MAX_HOPS 覆盖单类（0=仅种子精准召回），缺省回落 NYLON_MAX_HOPS
+    let cat_hops = |cat: i64| -> Option<u32> {
+        std::env::var(format!("NYLON_CAT{cat}_MAX_HOPS"))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .or_else(|| std::env::var("NYLON_MAX_HOPS").ok().and_then(|v| v.parse().ok()))
+    };
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败")).expect("解析 JSON 失败");
 
@@ -239,21 +239,12 @@ async fn locomo_evidence_recall() {
                     tenant_id: "locomo".into(),
                     owner_id: sample.clone(),
                     query: expanded.into(),
-                    context: if cat == 4 && cat4_hops.is_some() {
-                        cat4_hops.map(|h| ContextSpectrum {
-                            task: None,
-                            emotion_valence: None,
-                            device: None,
-                            max_hops: Some(h),
-                        })
-                    } else {
-                        all_hops.map(|h| ContextSpectrum {
-                            task: None,
-                            emotion_valence: None,
-                            device: None,
-                            max_hops: Some(h),
-                        })
-                    },
+                    context: cat_hops(cat).map(|h| ContextSpectrum {
+                        task: None,
+                        emotion_valence: None,
+                        device: None,
+                        max_hops: Some(h),
+                    }),
                     budget: std::env::var("NYLON_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(32),
                 })
                 .await
@@ -288,11 +279,13 @@ async fn locomo_evidence_recall() {
     println!();
     println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, {} 口径） ===", if embedder_on { "词面+向量融合" } else { "纯词面" });
     println!("会话数: {limit}, 织入轮次: {total_turns}");
-    if let Some(h) = cat4_hops {
-        println!("Cat4 ablation active: max_hops={h}");
+    for cat in 1..=4i64 {
+        if let Ok(v) = std::env::var(format!("NYLON_CAT{cat}_MAX_HOPS")) {
+            println!("Cat{cat} ablation active: max_hops={v}");
+        }
     }
-    if let Some(h) = all_hops {
-        println!("Global ablation active: max_hops={h}");
+    if let Ok(v) = std::env::var("NYLON_MAX_HOPS") {
+        println!("Global ablation active: max_hops={v}");
     }
     if total > 0 {
         println!("有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%", hit as f64 / total as f64 * 100.0);
