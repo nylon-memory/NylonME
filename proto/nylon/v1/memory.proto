@@ -8,6 +8,8 @@ option go_package = "github.com/nylonmemory/nylon/api/gen/nylon/v1;nylonv1";
 service MemoryEngine {
   // 记忆编织：原始事件 → 多丝分解 → 建边 → 冲突检测 → 入库
   rpc Weave(WeaveRequest) returns (WeaveResponse);
+  // 双层写入编织：整段 session 批量入库（叶子层=逐事件原文）+ 引擎侧 LLM 抽象事实层
+  rpc WeaveSession(WeaveSessionRequest) returns (WeaveSessionResponse);
   // 情境共振：种子 + 情境 → 共振记忆簇（优先级队列 + 全局激活预算）
   rpc Resonate(ResonateRequest) returns (ResonateResponse);
   // 向量检索：Top-K 近邻
@@ -87,4 +89,34 @@ message GetNodeResponse {
   uint64 node_id = 1;
   Filaments filaments = 2;
   float current_tension = 3;
+}
+
+// Session 事件（双层写入的输入单元）
+message SessionEvent {
+  string event_id = 1;   // 调用方事件 ID（用于来源回映射），可空
+  string speaker = 2;
+  string text = 3;
+}
+
+message WeaveSessionRequest {
+  string tenant_id = 1;
+  string owner_id = 2;
+  repeated SessionEvent events = 3;
+  bool skip_abstract = 4;          // true=只写叶子层（无 LLM 时自动跳过抽象层）
+}
+
+message EventNode {
+  string event_id = 1;
+  uint64 node_id = 2;
+}
+
+message FactNode {
+  uint64 node_id = 1;
+  string fact = 2;
+  repeated string source_event_ids = 3;  // 事实来源（层间显式边的锚点）
+}
+
+message WeaveSessionResponse {
+  repeated EventNode leaf_nodes = 1;  // 叶子层：事件 -> 节点
+  repeated FactNode fact_nodes = 2;   // 抽象层：事实 -> 来源事件
 }

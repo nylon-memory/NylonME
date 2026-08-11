@@ -57,66 +57,6 @@ async fn weave_turns(
     }
 }
 
-/// Session 级事实编织（抽象层）：整段 session 一次性交给 LLM 分解为原子事实
-///（指代消解到规范名），逐条 weave 入库；source dia_id 追加映射到事实节点。
-async fn weave_session_facts(
-    client: &mut MemoryEngineClient<tonic::transport::Channel>,
-    llm: &Option<std::sync::Arc<dyn nylon_llm::ChatModel>>,
-    sample: &str,
-    turns: &[serde_json::Value],
-    dia2nodes: &mut HashMap<String, Vec<u64>>,
-    total_turns: &mut usize,
-) {
-    let mut lines: Vec<String> = Vec::new();
-    for turn in turns {
-        let dia = turn["dia_id"].as_str().unwrap_or("");
-        let speaker = turn["speaker"].as_str().unwrap_or("");
-        let text = turn["text"].as_str().unwrap_or("");
-        if !dia.is_empty() && !text.is_empty() {
-            lines.push(format!("{dia} {speaker}: {text}"));
-        }
-    }
-    if lines.is_empty() {
-        return;
-    }
-    let Some(llm) = llm else { return };
-    let system = "You are a memory extraction engine. Given a dialogue session with turn IDs, extract atomic factual memories worth remembering long-term. Resolve pronouns and partial names to canonical full names (e.g. 'she' -> the person's name). Merge duplicate information. Preserve exact details: dates, numbers, places, names. Each fact must be self-contained. Output ONLY valid JSON: {\"facts\": [{\"fact\": \"...\", \"source\": [\"dia_id\", ...]}]}. Skip greetings and small talk without facts.";
-    let facts = match llm.chat_json(system, &lines.join("\n")).await {
-        Ok(v) => v.get("facts").and_then(|f| f.as_array()).cloned().unwrap_or_default(),
-        Err(e) => {
-            eprintln!("[eval] session 分解失败，本段跳过事实层: {e}");
-            return;
-        }
-    };
-    for f in facts {
-        let fact = f.get("fact").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        if fact.is_empty() {
-            continue;
-        }
-        let resp = client
-            .weave(WeaveRequest {
-                tenant_id: "locomo".into(),
-                owner_id: sample.to_string(),
-                raw_event: fact,
-                context: None,
-            })
-            .await
-            .unwrap()
-            .into_inner();
-        if let Some(srcs) = f.get("source").and_then(|v| v.as_array()) {
-            for src in srcs {
-                if let Some(d) = src.as_str() {
-                    dia2nodes.entry(d.to_string()).or_default().push(resp.node_id);
-                }
-            }
-        }
-        *total_turns += 1;
-        if *total_turns % 50 == 0 {
-            println!("[eval] weave 进度 {total_turns} 条");
-        }
-    }
-}
-
 #[tokio::test]
 #[ignore = "需要 LoCoMo 数据集（NYLON_LOCOMO_PATH），手动运行"]
 async fn locomo_evidence_recall() {
@@ -163,14 +103,14 @@ async fn locomo_evidence_recall() {
         println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
     }
     }
-    let expander = llm.clone(); // 查询扩展专用（NYLON_QUERY_EXPAND=1 启用）
-    // weave 时 LLM 分解默认关闭（太慢），NYLON_WEAVE_LLM=1 才启用
-    let svc_llm = if std::env::var("NYLON_WEAVE_LLM").is_ok() { llm.clone() } else { None };
-    // session 级编织：整段 session 一次性给 LLM 分解（指代消解+原子事实+来源标注），NYLON_SESSION_WEAVE=1 启用
+    // session 级编织（引擎内建双层写入），NYLON_SESSION_WEAVE=1 启用
     let session_weave = std::env::var("NYLON_SESSION_WEAVE").is_ok() && llm_on;
     if session_weave {
-        println!("[eval] session 级编织已启用 (NYLON_SESSION_WEAVE=1)");
+        println!("[eval] session 级编织已启用 (NYLON_SESSION_WEAVE=1, 引擎内建双层写入)");
     }
+    // 引擎需要 LLM 的场景：逐事件分解（NYLON_WEAVE_LLM）或 session 抽象层（NYLON_SESSION_WEAVE）
+    let svc_llm = if std::env::var("NYLON_WEAVE_LLM").is_ok() || session_weave { llm.clone() } else { None };
+    let expander = llm.clone(); // 查询扩展专用（NYLON_QUERY_EXPAND=1 启用）
     let svc = EngineService::new(store, dims, embedder, svc_llm);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
@@ -205,11 +145,45 @@ async fn locomo_evidence_recall() {
         let mut dia2nodes: HashMap<String, Vec<u64>> = HashMap::new();
         for sess in sessions {
             let turns = conv_obj[sess].as_array().cloned().unwrap_or_default();
-            // 双层写入：叶子层=逐轮原文（保精准回忆）；session_weave 时叠加抽象层=LLM 事实（保推理）
-            weave_turns(&mut client, &sample, &turns, &mut dia2nodes, &mut total_turns).await;
             if session_weave {
-                weave_session_facts(&mut client, &llm, &sample, &turns, &mut dia2nodes, &mut total_turns).await;
+                // 引擎内建双层写入：一次 RPC 完成叶子层+抽象层+层间边
+                let events: Vec<SessionEvent> = turns.iter().filter_map(|t| {
+                    let dia = t["dia_id"].as_str().unwrap_or("");
+                    let text = t["text"].as_str().unwrap_or("");
+                    if dia.is_empty() || text.is_empty() { return None; }
+                    Some(SessionEvent {
+                        event_id: dia.to_string(),
+                        speaker: t["speaker"].as_str().unwrap_or("").to_string(),
+                        text: text.to_string(),
+                    })
+                }).collect();
+                if !events.is_empty() {
+                    let resp = client
+                        .weave_session(WeaveSessionRequest {
+                            tenant_id: "locomo".into(),
+                            owner_id: sample.clone(),
+                            events,
+                            skip_abstract: false,
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner();
+                    for en in &resp.leaf_nodes {
+                        if !en.event_id.is_empty() {
+                            dia2nodes.entry(en.event_id.clone()).or_default().push(en.node_id);
+                        }
+                    }
+                    for f in &resp.fact_nodes {
+                        for sid in &f.source_event_ids {
+                            dia2nodes.entry(sid.clone()).or_default().push(f.node_id);
+                        }
+                    }
+                    total_turns += resp.leaf_nodes.len() + resp.fact_nodes.len();
+                    println!("[eval] {} 双层写入: {} 叶子 + {} 事实 (累计 {})", sess, resp.leaf_nodes.len(), resp.fact_nodes.len(), total_turns);
+                }
+                continue;
             }
+            weave_turns(&mut client, &sample, &turns, &mut dia2nodes, &mut total_turns).await;
         }
 
         // 对每个可答 QA 跑共振检索

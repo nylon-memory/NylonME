@@ -25,8 +25,9 @@ pub mod pb {
 
 use pb::memory_engine_server::MemoryEngine;
 use pb::{
-    ActivatedNode, GetNodeRequest, GetNodeResponse, ResonateRequest, ResonateResponse,
-    SearchRequest, SearchResponse, WeaveRequest, WeaveResponse,
+    ActivatedNode, EventNode, FactNode, GetNodeRequest, GetNodeResponse, ResonateRequest,
+    ResonateResponse, SearchRequest, SearchResponse, SessionEvent, WeaveRequest, WeaveResponse,
+    WeaveSessionRequest, WeaveSessionResponse,
 };
 
 /// 默认嵌入维度（bge-small 类模型），可用 NYLON_EMBED_DIMS 覆盖。
@@ -79,6 +80,8 @@ const VEC_SEED_QUOTA: usize = 8;
 const MAX_AUTO_LINKS: usize = 3;
 /// 自动建边权重（Phase 1 固定值，后续由相似度决定）。
 const AUTO_LINK_WEIGHT: f32 = 0.5;
+/// 层间显式边权重（抽象层事实 <-> 来源叶子），高于自动建边。
+const DERIVED_EDGE_WEIGHT: f32 = 1.0;
 
 fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -185,25 +188,36 @@ async fn judge_conflicts(llm: &dyn ChatModel, new_fact: &str, candidates: &[(u32
     }
 }
 
-#[tonic::async_trait]
-impl MemoryEngine for EngineService {
-    async fn weave(&self, req: Request<WeaveRequest>) -> Result<Response<WeaveResponse>, Status> {
-        let r = req.into_inner();
-        if r.tenant_id.is_empty() || r.owner_id.is_empty() || r.raw_event.is_empty() {
+/// weave 的 LLM 使用模式：Full=分解+冲突检测（单事件 RPC）；Off=纯启发式（session 双层写入路径）
+#[derive(Clone, Copy, PartialEq)]
+pub enum WeaveLlmMode { Full, Off }
+
+impl EngineService {
+    /// 单事件编织核心：单事件 RPC 与 session 双层写入共用。返回 (局部 ID, 自动建边目标, 冲突节点)。
+    async fn weave_one(
+        &self,
+        tenant_id: &str,
+        owner_id: &str,
+        raw_event: &str,
+        context: Option<pb::ContextSpectrum>,
+        llm_mode: WeaveLlmMode,
+    ) -> Result<(u32, Vec<u64>, Vec<u64>), Status> {
+        if tenant_id.is_empty() || owner_id.is_empty() || raw_event.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id / raw_event 均不能为空"));
         }
+        let llm_gate = if llm_mode == WeaveLlmMode::Full { self.llm.clone() } else { None };
         let now = now_secs();
-        let ctx = to_context(r.context);
-        let (fact, relations, emotion_valence, emotion_intensity, confidence) = if let Some(llm) = &self.llm {
-            decompose(llm.as_ref(), &r.raw_event).await.unwrap_or_else(|| {
+        let ctx = to_context(context);
+        let (fact, relations, emotion_valence, emotion_intensity, confidence) = if let Some(llm) = &llm_gate {
+            decompose(llm.as_ref(), raw_event).await.unwrap_or_else(|| {
                 let mut rels: Vec<String> = ctx.task.clone().into_iter().collect();
-                if rels.is_empty() { rels = heuristic_relations(&r.raw_event); }
-                (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
+                if rels.is_empty() { rels = heuristic_relations(raw_event); }
+                (raw_event.to_string(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
             })
         } else {
             let mut rels: Vec<String> = ctx.task.clone().into_iter().collect();
-            if rels.is_empty() { rels = heuristic_relations(&r.raw_event); }
-            (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
+            if rels.is_empty() { rels = heuristic_relations(raw_event); }
+            (raw_event.to_string(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
         };
         // Embed the decomposed fact before moving it into the node
         let embedding = if let Some(emb) = &self.embedder {
@@ -216,7 +230,7 @@ impl MemoryEngine for EngineService {
         };
         let mut node = MemoryNode {
             id: 0, // 全局 ID 分配在 Phase 2 接入；node_id 暂用局部 ID
-            owner_id: r.owner_id.clone(),
+            owner_id: owner_id.to_string(),
             filaments: Filaments {
                 fact,
                 emotion_valence,
@@ -261,7 +275,7 @@ impl MemoryEngine for EngineService {
                         .store
                         .graph()
                         .get_node(cand)
-                        .map(|n| n.owner_id == r.owner_id)
+                        .map(|n| n.owner_id == owner_id)
                         .unwrap_or(false);
                     if is_same_owner {
                         picks.push(cand);
@@ -280,7 +294,7 @@ impl MemoryEngine for EngineService {
                     if cid == local { continue; }
                     if candidates.len() >= 4 { break; }
                     if let Some(cn) = inner.store.graph().get_node(cid) {
-                        if cn.owner_id == r.owner_id {
+                        if cn.owner_id == owner_id {
                             candidates.push((cid, cn.filaments.fact.clone()));
                         }
                     }
@@ -288,23 +302,112 @@ impl MemoryEngine for EngineService {
             }
             (local, linked, edge_ticket.unwrap_or(node_ticket), candidates)
         };
-        let conflict_nodes: Vec<u64> = if let Some(llm) = &llm {
+        let conflict_nodes: Vec<u64> = if let Some(llm) = &llm_gate {
             if !candidate_facts.is_empty() {
-                judge_conflicts(llm.as_ref(), &r.raw_event, &candidate_facts).await
+                judge_conflicts(llm.as_ref(), raw_event, &candidate_facts).await
             } else {
                 Vec::new()
             }
         } else {
             Vec::new()
         };
-        let resp = WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes };
         let final_ticket = final_ticket;
         // group commit：刷盘等待移出全局锁，并发写共享同一批次 fsync
         tokio::task::spawn_blocking(move || final_ticket.wait())
             .await
             .map_err(|e| Status::internal(format!("durability join: {e}")))?
             .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
-        Ok(Response::new(resp))
+        Ok((local, linked, conflict_nodes))
+    }
+
+    }
+
+/// Session 级抽象事实抽取（双层写入的理解层）：整段 session 一次 LLM 调用，
+/// 指代消解+原子事实+来源 event_id；失败返回空（调用方跳过抽象层）。
+async fn extract_session_facts(llm: &dyn ChatModel, session_text: &str) -> Vec<(String, Vec<String>)> {
+    let system = "You are a memory extraction engine. Given a dialogue session with turn IDs, extract atomic factual memories worth remembering long-term. Resolve pronouns and partial names to canonical full names (e.g. 'she' -> the person's name). Merge duplicate information. Preserve exact details: dates, numbers, places, names. Each fact must be self-contained. Output ONLY valid JSON: {\"facts\": [{\"fact\": \"...\", \"source\": [\"event_id\", ...]}]}. Skip greetings and small talk without facts.";
+    match llm.chat_json(system, session_text).await {
+        Ok(v) => v.get("facts")
+            .and_then(|f| f.as_array())
+            .map(|arr| arr.iter().filter_map(|f| {
+                let fact = f.get("fact").and_then(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+                let srcs: Vec<String> = f.get("source")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                Some((fact, srcs))
+            }).collect())
+            .unwrap_or_default(),
+        Err(e) => {
+            eprintln!("[weave_session] LLM session 分解失败，跳过抽象层: {e}");
+            Vec::new()
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl MemoryEngine for EngineService {
+    async fn weave(&self, req: Request<WeaveRequest>) -> Result<Response<WeaveResponse>, Status> {
+        let r = req.into_inner();
+        let (local, linked, conflict_nodes) = self
+            .weave_one(&r.tenant_id, &r.owner_id, &r.raw_event, r.context, WeaveLlmMode::Full)
+            .await?;
+        Ok(Response::new(WeaveResponse { node_id: local as u64, linked_nodes: linked, conflict_nodes }))
+    }
+
+    /// 双层写入：叶子层=逐事件原文入库；抽象层=引擎侧 LLM session 分解出原子事实，
+    /// 事实节点与来源叶子节点之间建显式 derived 边（层间互联，供共振跨层扩散）。
+    async fn weave_session(&self, req: Request<WeaveSessionRequest>) -> Result<Response<WeaveSessionResponse>, Status> {
+        let r = req.into_inner();
+        if r.tenant_id.is_empty() || r.owner_id.is_empty() {
+            return Err(Status::invalid_argument("tenant_id / owner_id 均不能为空"));
+        }
+        let events: Vec<&SessionEvent> = r.events.iter().filter(|e| !e.text.is_empty()).collect();
+        // 叶子层：逐事件原文（启发式路径，与验证过的双层实验口径一致）
+        let mut leaf_nodes: Vec<EventNode> = Vec::new();
+        let mut id2local: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for ev in &events {
+            let raw = format!("{}: {}", ev.speaker, ev.text);
+            let (local, _, _) = self.weave_one(&r.tenant_id, &r.owner_id, &raw, None, WeaveLlmMode::Off).await?;
+            if !ev.event_id.is_empty() { id2local.insert(ev.event_id.clone(), local); }
+            leaf_nodes.push(EventNode { event_id: ev.event_id.clone(), node_id: local as u64 });
+        }
+        // 抽象层：整段 session 一次 LLM 调用，分解为原子事实+来源标注
+        let mut fact_nodes: Vec<FactNode> = Vec::new();
+        let mut derived: Vec<(u32, u32)> = Vec::new();
+        if !r.skip_abstract && !events.is_empty() {
+            if let Some(llm) = &self.llm {
+                let lines: Vec<String> = events.iter().map(|ev| {
+                    if ev.event_id.is_empty() { format!("{}: {}", ev.speaker, ev.text) }
+                    else { format!("{} {}: {}", ev.event_id, ev.speaker, ev.text) }
+                }).collect();
+                for (fact, sources) in extract_session_facts(llm.as_ref(), &lines.join("\n")).await {
+                    let (local, _, _) = self.weave_one(&r.tenant_id, &r.owner_id, &fact, None, WeaveLlmMode::Off).await?;
+                    for sid in &sources {
+                        if let Some(l) = id2local.get(sid) { derived.push((local, *l)); }
+                    }
+                    fact_nodes.push(FactNode { node_id: local as u64, fact, source_event_ids: sources });
+                }
+            }
+        }
+        // 层间显式边：统一一批写入，一次 durability 等待
+        if !derived.is_empty() {
+            let ticket = {
+                let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
+                let mut t = None;
+                for (a, b) in derived {
+                    t = Some(inner.store.add_edge(a, b, DERIVED_EDGE_WEIGHT).map_err(|e| Status::internal(format!("wal append: {e}")))?);
+                }
+                t
+            };
+            if let Some(t) = ticket {
+                tokio::task::spawn_blocking(move || t.wait())
+                    .await
+                    .map_err(|e| Status::internal(format!("durability join: {e}")))?
+                    .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
+            }
+        }
+        Ok(Response::new(WeaveSessionResponse { leaf_nodes, fact_nodes }))
     }
 
     async fn resonate(&self, req: Request<ResonateRequest>) -> Result<Response<ResonateResponse>, Status> {
