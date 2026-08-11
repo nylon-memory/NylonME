@@ -391,7 +391,9 @@ impl MemoryEngine for EngineService {
             }
         }
         // 层间显式边：统一一批写入，一次 durability 等待
-        if !derived.is_empty() {
+        // NYLON_DERIVED_EDGES=1 才开（实测全开对 Cat2/3 有负收益，自动建边的隐式互联更稳，默认关）
+        let derived_on = std::env::var("NYLON_DERIVED_EDGES").map(|v| v != "0").unwrap_or(false);
+        if derived_on && !derived.is_empty() {
             let ticket = {
                 let mut inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
                 let mut t = None;
