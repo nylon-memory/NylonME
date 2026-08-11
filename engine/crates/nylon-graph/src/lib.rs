@@ -119,6 +119,8 @@ impl FilamentFilter {
 pub struct ContextSpectrum {
     pub task: Option<String>,
     pub emotion_valence: Option<f32>,
+    /// 联想深度上限：0=仅种子节点（精准回忆，不扩散）；None=默认 MAX_DEPTH
+    pub max_hops: Option<u32>,
 }
 
 impl ContextSpectrum {
@@ -489,18 +491,19 @@ impl MemoryGraph {
     /// 已删除（墓碑）节点不参与遍历，也不会出现在结果中。
     pub fn resonate(
         &self,
-        seeds: &[u32],
+        seeds: &[(u32, f32)],
         ctx: &ContextSpectrum,
         now: i64,
         budget: usize,
     ) -> Vec<(u32, f32)> {
         let mut heap = BinaryHeap::new();
         let mut best: HashMap<u32, f32> = HashMap::new();
-        for &s in seeds {
-            heap.push(State { score: 1.0, node: s, depth: 0 });
+        let max_depth = ctx.max_hops.map_or(MAX_DEPTH, |h| h.min(255) as u8);
+        for &(s, w) in seeds {
+            heap.push(State { score: w.clamp(MIN_STRENGTH, 1.0), node: s, depth: 0 });
         }
         while let Some(State { score, node, depth }) = heap.pop() {
-            if depth > MAX_DEPTH || score < MIN_STRENGTH {
+            if depth > max_depth || score < MIN_STRENGTH {
                 continue;
             }
             if best.get(&node).is_some_and(|&b| b >= score) {
@@ -572,10 +575,23 @@ mod tests {
         g.add_edge(a, b, 0.9);
         g.add_edge(b, c, 0.9);
         let ctx = ContextSpectrum::default();
-        let out = g.resonate(&[a], &ctx, 0, DEFAULT_BUDGET);
+        let out = g.resonate(&[(a, 1.0)], &ctx, 0, DEFAULT_BUDGET);
         let score_of = |id: u32| out.iter().find(|&&(n, _)| n == id).map(|&(_, s)| s);
         assert!(score_of(a) > score_of(b), "1 跳应弱于种子");
         assert!(score_of(b).unwrap() > score_of(c).unwrap_or(0.0), "2 跳应进一步衰减");
+    }
+
+    #[test]
+    fn resonate_respects_max_hops_zero() {
+        let mut g = MemoryGraph::new();
+        let a = g.add_node(node("seed", &[]));
+        let b = g.add_node(node("neighbor", &[]));
+        g.add_edge(a, b, 0.9);
+        let ctx0 = ContextSpectrum { max_hops: Some(0), ..Default::default() };
+        let out0 = g.resonate(&[(a, 1.0)], &ctx0, 0, DEFAULT_BUDGET);
+        assert_eq!(out0.len(), 1, "max_hops=0 只应返回种子节点");
+        let outd = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
+        assert_eq!(outd.len(), 2, "默认应扩散到 1 跳邻居");
     }
 
     #[test]
@@ -586,7 +602,7 @@ mod tests {
             let leaf = g.add_node(node(&format!("叶子 {i}"), &[]));
             g.add_edge(hub, leaf, 0.9);
         }
-        let out = g.resonate(&[hub], &ContextSpectrum::default(), 0, 32);
+        let out = g.resonate(&[(hub, 1.0)], &ContextSpectrum::default(), 0, 32);
         assert!(out.len() <= 32, "全局预算应截断星型扩散，实际 {}", out.len());
     }
 
@@ -617,7 +633,7 @@ mod tests {
         assert_eq!(g.node_count(), 2);
         assert!(!g.remove_node(b), "重复删除应返回 false");
         assert!(g.delta.adj.get(&b).is_none(), "b 的 Delta 出边应被清理");
-        let out = g.resonate(&[a], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
+        let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
         let ids: Vec<u32> = out.iter().map(|&(n, _)| n).collect();
         assert!(ids.contains(&a));
         assert!(!ids.contains(&b), "删除的节点不参与共振结果");
@@ -653,7 +669,7 @@ mod tests {
         g.compact();
         assert!(g.remove_edge(a, b), "CSR 中的边应加墓碑");
         assert!(g.edge_tombstones.contains(&(a, b)));
-        let out = g.resonate(&[a], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
+        let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
         let ids: Vec<u32> = out.iter().map(|&(n, _)| n).collect();
         assert!(!ids.contains(&b) && !ids.contains(&c), "删边后 b/c 不可达");
     }
@@ -724,12 +740,12 @@ mod tests {
         assert_eq!(g.delta.edge_count, 0);
         assert!(g.tombstones.is_empty() && g.edge_tombstones.is_empty(), "墓碑应被清空");
         assert!(g.neighbors(a).is_empty(), "a→b/a→c 都应被物理清除");
-        let out = g.resonate(&[a], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
+        let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
         let ids: Vec<u32> = out.iter().map(|&(n, _)| n).collect();
         assert_eq!(ids, vec![a], "compact 后只剩 a 可达");
         // compact 后仍能正常写入
         g.add_edge(a, d, 0.7);
-        let out = g.resonate(&[a], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
+        let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
         assert!(out.iter().any(|&(n, _)| n == d), "compact 后新增边应立即可达");
     }
 

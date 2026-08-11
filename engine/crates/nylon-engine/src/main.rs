@@ -70,8 +70,8 @@ fn main() {
     g.add_edge(trip, last, 0.7);
     g.add_edge(hobby, last, 0.1);
 
-    let ctx = ContextSpectrum { task: Some("出差".into()), emotion_valence: None };
-    let activated = g.resonate(&[flight], &ctx, 0, DEFAULT_BUDGET);
+    let ctx = ContextSpectrum { task: Some("出差".into()), emotion_valence: None, max_hops: None };
+    let activated = g.resonate(&[(flight, 1.0)], &ctx, 0, DEFAULT_BUDGET);
 
     println!("\n情境共振（种子=机票, 任务=出差）:");
     for (id, score) in &activated {

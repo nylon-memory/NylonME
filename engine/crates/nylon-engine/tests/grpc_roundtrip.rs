@@ -30,7 +30,7 @@ fn weave_req(fact: &str) -> WeaveRequest {
         tenant_id: "t1".into(),
         owner_id: "alice".into(),
         raw_event: fact.into(),
-        context: Some(ContextSpectrum { task: Some("出差".into()), emotion_valence: None, device: None }),
+        context: Some(ContextSpectrum { task: Some("出差".into()), emotion_valence: None, device: None, max_hops: None }),
     }
 }
 
@@ -60,7 +60,7 @@ async fn grpc_roundtrip() {
             tenant_id: "t1".into(),
             owner_id: "alice".into(),
             query: "机票".into(),
-            context: Some(ContextSpectrum { task: Some("出差".into()), emotion_valence: None, device: None }),
+            context: Some(ContextSpectrum { task: Some("出差".into()), emotion_valence: None, device: None, max_hops: None }),
             budget: 16,
         })
         .await

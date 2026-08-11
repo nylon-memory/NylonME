@@ -31,7 +31,8 @@ message Filaments {
 message ContextSpectrum {
   optional string task = 1;              // 任务上下文
   optional float emotion_valence = 2;    // 情绪上下文
-  optional string device = 3;            // 设备上下文
+  optional string device = 3;
+  optional uint32 max_hops = 4;         // 联想深度上限：0=仅种子（精准回忆，不扩散）；缺省走默认 MAX_DEPTH            // 设备上下文
 }
 
 message WeaveRequest {
@@ -63,6 +64,7 @@ message ActivatedNode {
 
 message ResonateResponse {
   repeated ActivatedNode activated = 1;  // 按共振强度降序
+  repeated uint64 seed_ids = 2;             // 本次共振的种子节点（可解释性）  // 按共振强度降序
 }
 
 message SearchRequest {

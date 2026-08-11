@@ -32,10 +32,50 @@ use pb::{
 /// 默认嵌入维度（bge-small 类模型），可用 NYLON_EMBED_DIMS 覆盖。
 pub const DEFAULT_EMBED_DIMS: usize = 384;
 /// Resonate 种子数量上限。
-const MAX_SEEDS: usize = 8;
+/// 英文停用词表：词面选种与启发式关系丝共用
+const STOPWORDS: &[&str] = &[
+    "what","when","where","which","who","whom","whose","why","how",
+    "did","does","do","is","are","was","were","be","been","being",
+    "the","a","an","and","or","but","if","then","than","so",
+    "they","them","their","he","she","his","her","it","its","you","your","we","our","i","me","my",
+    "have","has","had","say","said","tell","told","talk","talked","about",
+    "would","could","should","will","shall","can","may","might",
+    "many","much","often","ever","never","any","some","all","both","first","last",
+    "go","went","going","come","came","get","got","make","made","take","took",
+    "to","of","in","on","at","for","with","from","by","as","into","out","up","down",
+];
+
+/// 启发式关系丝抽取：无 LLM / 无 context 时从原文提取内容标签。
+/// 句中大写开头的专有名（人名/地名/机构）优先，其次长度 >=4 的非停用实词，最多 3 个。
+/// 这是自动建边（auto-link）的标签来源——没有它图是零边，扩散空转。
+fn heuristic_relations(text: &str) -> Vec<String> {
+    let mut cands: Vec<(i32, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (idx, w) in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).enumerate() {
+        let lower = w.to_lowercase();
+        if lower.len() < 4 || STOPWORDS.contains(&lower.as_str()) {
+            continue;
+        }
+        if !seen.insert(lower.clone()) {
+            continue;
+        }
+        let mut score = lower.len().min(8) as i32;
+        if idx > 0 && w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            score += 10; // 句中大写开头 = 专有名
+        }
+        cands.push((score, lower));
+    }
+    cands.sort_by(|a, b| b.0.cmp(&a.0));
+    cands.into_iter().take(3).map(|(_, w)| w).collect()
+}
+
+/// 种子池上限默认值，可用 NYLON_MAX_SEEDS 覆盖（实验旋钮）
+fn max_seeds() -> usize {
+    std::env::var("NYLON_MAX_SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(20)
+}
 /// 向量种子保底名额：语义通道的召回兜底，防止被词面种子挤占。
-const VEC_SEED_QUOTA: usize = 4;
-/// Weave 自动建边上限。
+const VEC_SEED_QUOTA: usize = 8;
+//// Weave 自动建边上限。
 const MAX_AUTO_LINKS: usize = 3;
 /// 自动建边权重（Phase 1 固定值，后续由相似度决定）。
 const AUTO_LINK_WEIGHT: f32 = 0.5;
@@ -62,7 +102,7 @@ fn to_activated(local: u32, score: f32, node: &MemoryNode) -> ActivatedNode {
 }
 
 fn to_context(ctx: Option<pb::ContextSpectrum>) -> ContextSpectrum {
-    ctx.map(|c| ContextSpectrum { task: c.task, emotion_valence: c.emotion_valence }).unwrap_or_default()
+    ctx.map(|c| ContextSpectrum { task: c.task, emotion_valence: c.emotion_valence, max_hops: c.max_hops }).unwrap_or_default()
 }
 
 struct Inner {
@@ -150,11 +190,13 @@ impl MemoryEngine for EngineService {
         let ctx = to_context(r.context);
         let (fact, relations, emotion_valence, emotion_intensity, confidence) = if let Some(llm) = &self.llm {
             decompose(llm.as_ref(), &r.raw_event).await.unwrap_or_else(|| {
-                let rels: Vec<String> = ctx.task.clone().into_iter().collect();
+                let mut rels: Vec<String> = ctx.task.clone().into_iter().collect();
+                if rels.is_empty() { rels = heuristic_relations(&r.raw_event); }
                 (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
             })
         } else {
-            let rels: Vec<String> = ctx.task.clone().into_iter().collect();
+            let mut rels: Vec<String> = ctx.task.clone().into_iter().collect();
+            if rels.is_empty() { rels = heuristic_relations(&r.raw_event); }
             (r.raw_event.clone(), rels, ctx.emotion_valence.unwrap_or(0.0), 0.5, 0.8)
         };
         // Embed the decomposed fact before moving it into the node
@@ -267,11 +309,11 @@ impl MemoryEngine for EngineService {
         let ctx = to_context(r.context);
         let query = r.query.to_lowercase();
         // 向量种子（锁外计算）
-        let vec_seeds: Vec<u32> = if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
+        let vec_seeds: Vec<(u32, f32)> = if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
             match emb.embed(std::slice::from_ref(&r.query)).await {
                 Ok(v) => {
                     let inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
-                    inner.index.search(&v[0], MAX_SEEDS).into_iter().map(|(id, _)| id).collect()
+                    inner.index.search(&v[0], max_seeds())
                 }
                 Err(_) => Vec::new(), // 嵌入服务故障时降级为纯词面
             }
@@ -283,39 +325,68 @@ impl MemoryEngine for EngineService {
 
         // 种子选择：query 词项重叠打分（完整子串命中加权） > task 命中关系丝 > 最近节点兜底。
         // 词项化按非字母数字切分；CJK 查询无空格时退化为整串 contains，行为与原先一致。
-        let mut lex_seeds: Vec<u32> = Vec::new();
+        let mut lex_seeds: Vec<(u32, f32)> = Vec::new();
         if !query.is_empty() {
-            let terms: Vec<&str> = query
+            let mut terms: Vec<&str> = query
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|t| !t.is_empty())
+                .filter(|t| t.len() >= 3 && !STOPWORDS.contains(t))
                 .collect();
-            let mut scored: Vec<(u32, usize)> = g
+            if terms.is_empty() {
+                // 全是停用词的查询（如 "When did they meet?"）：退回未过滤词项
+                terms = query
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+            }
+            // 第一遍：统计词项文档频率（df），IDF 加权——稀有词（实体）权重远高于常见词
+            let owner_facts: Vec<(u32, String)> = g
                 .live_nodes()
                 .filter(|(_, n)| n.owner_id == r.owner_id)
-                .filter_map(|(id, n)| {
-                    let fact = n.filaments.fact.to_lowercase();
-                    let mut score = terms.iter().filter(|t| fact.contains(**t)).count();
-                    if !terms.is_empty() && fact.contains(&query) {
-                        score += terms.len(); // 完整子串命中额外加权
+                .map(|(id, n)| (id, n.filaments.fact.to_lowercase()))
+                .collect();
+            let n_docs = owner_facts.len().max(1) as f32;
+            let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            for (_, fact) in &owner_facts {
+                for t in &terms {
+                    if fact.contains(*t) {
+                        *df.entry(*t).or_insert(0) += 1;
                     }
-                    if score > 0 { Some((id, score)) } else { None }
+                }
+            }
+            let idf_len = |t: &str| {
+                let d = df.get(t).copied().unwrap_or(0) as f32;
+                (((n_docs + 1.0) / (d + 1.0)).ln() + 1.0) * (t.len().min(8) as f32)
+            };
+            let full: f32 = terms.iter().map(|t| idf_len(*t)).sum();
+            let norm = (full * 2.0).max(1.0);
+            let mut scored: Vec<(u32, f32)> = owner_facts
+                .iter()
+                .filter_map(|(id, fact)| {
+                    let mut score: f32 = terms.iter().filter(|t| fact.contains(**t)).map(|t| idf_len(*t)).sum();
+                    if !terms.is_empty() && fact.contains(&query) {
+                        score += full; // 完整子串命中额外加权
+                    }
+                    if score > 0.0 { Some((*id, score)) } else { None }
                 })
                 .collect();
-            scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            lex_seeds = scored.into_iter().map(|(id, _)| id).collect();
+            scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            lex_seeds = scored.into_iter().map(|(id, sc)| (id, (sc / norm).clamp(0.1, 1.0))).collect();
         }
         // 融合向量种子：去重后并入（词面优先）
         // 融合：向量种子保底 VEC_SEED_QUOTA 个名额，词面种子去重补满
-        let mut seeds: Vec<u32> = Vec::new();
-        for id in vec_seeds.into_iter().take(VEC_SEED_QUOTA) {
-            seeds.push(id);
+        let mut seeds: Vec<(u32, f32)> = Vec::new();
+        for (id, sim) in vec_seeds.into_iter().take(VEC_SEED_QUOTA) {
+            seeds.push((id, sim.clamp(0.05, 1.0)));
         }
-        for id in lex_seeds {
-            if seeds.len() >= MAX_SEEDS {
+        for (id, w) in lex_seeds {
+            if seeds.len() >= max_seeds() {
                 break;
             }
-            if !seeds.contains(&id) {
-                seeds.push(id);
+            if let Some(slot) = seeds.iter_mut().find(|(sid, _)| *sid == id) {
+                slot.1 = (slot.1.max(w) + 0.15).min(1.0); // 词面+向量双通道命中：取高者并加成
+            } else {
+                seeds.push((id, w));
             }
         }
         if seeds.is_empty() {
@@ -324,6 +395,7 @@ impl MemoryEngine for EngineService {
                     .find_by_filaments(&FilamentFilter { relations_any: Some(vec![task.clone()]), ..Default::default() })
                     .into_iter()
                     .filter(|&id| g.get_node(id).map(|n| n.owner_id == r.owner_id).unwrap_or(false))
+                    .map(|id| (id, 0.5f32))
                     .collect();
             }
         }
@@ -334,9 +406,9 @@ impl MemoryEngine for EngineService {
                 .map(|(id, n)| (id, n.filaments.created_at))
                 .collect();
             recent.sort_by_key(|&(_, ts)| std::cmp::Reverse(ts));
-            seeds = recent.into_iter().map(|(id, _)| id).collect();
+            seeds = recent.into_iter().map(|(id, _)| (id, 0.5f32)).collect();
         }
-        seeds.truncate(MAX_SEEDS);
+        seeds.truncate(max_seeds());
 
         let budget = if r.budget == 0 { nylon_graph::DEFAULT_BUDGET } else { r.budget as usize };
         let activated = g.resonate(&seeds, &ctx, now_secs(), budget);
@@ -344,7 +416,7 @@ impl MemoryEngine for EngineService {
             .into_iter()
             .filter_map(|(id, score)| g.get_node(id).map(|n| to_activated(id, score, n)))
             .collect();
-        Ok(Response::new(ResonateResponse { activated: out }))
+        Ok(Response::new(ResonateResponse { activated: out, seed_ids: seeds.iter().map(|&(sid, _)| sid as u64).collect() }))
     }
 
     async fn search(&self, req: Request<SearchRequest>) -> Result<Response<SearchResponse>, Status> {

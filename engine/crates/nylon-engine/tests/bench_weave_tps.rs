@@ -57,6 +57,7 @@ async fn weave_tps() {
                             task: Some("bench".into()),
                             emotion_valence: None,
                             device: None,
+                            max_hops: None,
                         }),
                     })
                     .await

@@ -32,6 +32,14 @@ async fn locomo_evidence_recall() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2);
+    // Cat4 ablation：NYLON_CAT4_MAX_HOPS=0 时 Cat4 查询仅返回种子（不扩散）
+    let cat4_hops: Option<u32> = std::env::var("NYLON_CAT4_MAX_HOPS")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    // 全局联想深度：NYLON_MAX_HOPS=0 即纯种子精准召回模式
+    let all_hops: Option<u32> = std::env::var("NYLON_MAX_HOPS")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败")).expect("解析 JSON 失败");
 
@@ -46,6 +54,7 @@ async fn locomo_evidence_recall() {
     let embedder_on = embedder.is_some();
     let llm = llm_from_env();
     let llm_on = llm.is_some();
+    let query_expand = std::env::var("NYLON_QUERY_EXPAND").is_ok() && llm_on;
     if embedder_on {
         println!("[eval] 嵌入通道已启用 (NYLON_EMBED_URL), dims={dims}");
     if llm_on {
@@ -61,7 +70,10 @@ async fn locomo_evidence_recall() {
         println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
     }
     }
-    let svc = EngineService::new(store, dims, embedder, llm);
+    let expander = llm.clone(); // 查询扩展专用（NYLON_QUERY_EXPAND=1 启用）
+    // weave 时 LLM 分解默认关闭（太慢），NYLON_WEAVE_LLM=1 才启用
+    let svc_llm = if std::env::var("NYLON_WEAVE_LLM").is_ok() { llm } else { None };
+    let svc = EngineService::new(store, dims, embedder, svc_llm);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -75,7 +87,8 @@ async fn locomo_evidence_recall() {
 
     let mut total = 0usize;
     let mut hit = 0usize;
-    let mut per_cat: HashMap<i64, (usize, usize)> = HashMap::new(); // cat -> (total, hit)
+    let mut per_cat: HashMap<i64, (usize, usize, usize)> = HashMap::new(); // cat -> (total, hit, seed_hit)
+    let mut seed_total_hit = 0usize;
     let mut total_turns = 0usize;
 
     for conv in data.as_array().expect("顶层应为数组").iter().take(limit) {
@@ -132,13 +145,32 @@ async fn locomo_evidence_recall() {
                 continue;
             }
             let question = qa["question"].as_str().unwrap_or("");
+            let expanded = if query_expand {
+                expand_query(expander.as_deref(), question).await.unwrap_or_else(|| question.to_string())
+            } else {
+                question.to_string()
+            };
             let resp = client
                 .resonate(ResonateRequest {
                     tenant_id: "locomo".into(),
                     owner_id: sample.clone(),
-                    query: question.into(),
-                    context: None,
-                    budget: 32,
+                    query: expanded.into(),
+                    context: if cat == 4 && cat4_hops.is_some() {
+                        cat4_hops.map(|h| ContextSpectrum {
+                            task: None,
+                            emotion_valence: None,
+                            device: None,
+                            max_hops: Some(h),
+                        })
+                    } else {
+                        all_hops.map(|h| ContextSpectrum {
+                            task: None,
+                            emotion_valence: None,
+                            device: None,
+                            max_hops: Some(h),
+                        })
+                    },
+                    budget: std::env::var("NYLON_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(32),
                 })
                 .await
                 .unwrap()
@@ -147,14 +179,24 @@ async fn locomo_evidence_recall() {
             let ok = evidence
                 .iter()
                 .any(|e| dia2node.get(e).map(|n| got.contains(n)).unwrap_or(false));
+            // 种子层召回：证据是否直接进入种子集（不扩散的理论上限）
+            let seed_hit = evidence
+                .iter()
+                .any(|e| dia2node.get(e).map(|n| resp.seed_ids.contains(n)).unwrap_or(false));
             total += 1;
             if ok {
                 hit += 1;
             }
-            let entry = per_cat.entry(cat).or_insert((0, 0));
+            if seed_hit {
+                seed_total_hit += 1;
+            }
+            let entry = per_cat.entry(cat).or_insert((0, 0, 0));
             entry.0 += 1;
             if ok {
                 entry.1 += 1;
+            }
+            if seed_hit {
+                entry.2 += 1;
             }
         }
     }
@@ -162,14 +204,33 @@ async fn locomo_evidence_recall() {
     println!();
     println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, {} 口径） ===", if embedder_on { "词面+向量融合" } else { "纯词面" });
     println!("会话数: {limit}, 织入轮次: {total_turns}");
+    if let Some(h) = cat4_hops {
+        println!("Cat4 ablation active: max_hops={h}");
+    }
+    if let Some(h) = all_hops {
+        println!("Global ablation active: max_hops={h}");
+    }
     if total > 0 {
         println!("有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%", hit as f64 / total as f64 * 100.0);
     } else {
         println!("无有效 QA");
     }
+    println!("种子层召回: {seed_total_hit}/{total} = {:.1}%", seed_total_hit as f64 / total.max(1) as f64 * 100.0);
     let mut cats: Vec<_> = per_cat.iter().map(|(c, v)| (*c, *v)).collect();
     cats.sort_by_key(|(c, _)| *c);
-    for (cat, (t, h)) in &cats {
-        println!("  category {cat}: {h}/{t} = {:.1}%", *h as f64 / *t as f64 * 100.0);
+    for (cat, (t, h, sh)) in &cats {
+        println!("  category {cat}: 最终 {h}/{t} = {:.1}% | 种子 {sh}/{t} = {:.1}%",
+            *h as f64 / *t as f64 * 100.0, *sh as f64 / *t as f64 * 100.0);
     }
+}
+
+/// LLM 查询扩展：把问题改写成 3-6 个实体关键词，附加在原问题后，提升词面/向量种子命中
+async fn expand_query(llm: Option<&dyn nylon_llm::ChatModel>, question: &str) -> Option<String> {
+    let llm = llm?;
+    let system = "You are a search query expander for a conversation memory system. Given a question about past conversations, output ONLY valid JSON: {\"keywords\": [3-6 key entities, names, places, dates, or topics that likely appear verbatim in the original conversation]. Use the original language of the question. No explanations.";
+    let v = llm.chat_json(system, question).await.ok()?;
+    let kws: Vec<String> = v.get("keywords")?.as_array()?
+        .iter().filter_map(|k| k.as_str().map(|s| s.to_string())).collect();
+    if kws.is_empty() { return None; }
+    Some(format!("{question} {}", kws.join(" ")))
 }
