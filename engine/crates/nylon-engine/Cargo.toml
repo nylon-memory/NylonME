@@ -18,6 +18,9 @@ tonic-prost = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
+rmcp = { version = "3.1.2", features = ["server", "transport-io"] }
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"

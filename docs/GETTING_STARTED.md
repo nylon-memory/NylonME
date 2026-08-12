@@ -95,3 +95,41 @@ Good facts are self-contained sentences with names, numbers, and paths. Never we
 ## Tuning
 
 See the [README](../README.md#tuning-knobs-env-vars) for the full env-var knob table (`NYLON_MAX_SEEDS`, `NYLON_CAT{n}_MAX_HOPS`, `NYLON_RERANK_VEC`, ...).
+## Use it from your AI agent in 2 minutes (MCP)
+
+`nylon-engine mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio with the engine **embedded** — no daemon, no ports, data lands in `~/.nylonme/data` automatically. Any MCP-capable client (Claude Code, Cursor, Codex, VS Code Copilot, ...) can use it directly.
+
+Claude Code:
+
+```bash
+claude mcp add nylonme -- /path/to/nylon-engine mcp
+```
+
+Cursor / VS Code (`.cursor/mcp.json` or MCP settings):
+
+```json
+{
+  "mcpServers": {
+    "nylonme": {
+      "command": "/path/to/nylon-engine",
+      "args": ["mcp"],
+      "env": { "NYLON_OWNER": "my-project" }
+    }
+  }
+}
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.nylonme]
+command = "/path/to/nylon-engine"
+args = ["mcp"]
+
+[mcp_servers.nylonme.env]
+NYLON_OWNER = "my-project"
+```
+
+The agent then gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node by id). Point it at a shared engine instead by keeping the gRPC daemon mode (`serve`) and calling `nylon_cli` — see the LAN deployment pattern in the repo wiki/discussions.
+
+Optional env for MCP mode: `NYLON_DATA_DIR` (default `~/.nylonme/data`), `NYLON_OWNER` (default memory namespace), `NYLON_EMBED_URL`/`NYLON_EMBED_MODEL`/`NYLON_EMBED_DIMS` (semantic recall via ollama), `NYLON_LLM_*` (session-level fact weaving).

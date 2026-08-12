@@ -3,6 +3,7 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+mod mcp;
 mod service;
 
 use nylon_storage::PersistentGraph;
@@ -63,7 +64,30 @@ fn main() {
         });
         return;
     }
-
+    if args.get(1).map(|s| s.as_str()) == Some("mcp") {
+        let dims: usize = std::env::var("NYLON_EMBED_DIMS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(service::DEFAULT_EMBED_DIMS);
+        let data = std::env::var("NYLON_DATA_DIR").unwrap_or_else(|_| {
+            let home = std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| ".".into());
+            format!("{home}/.nylonme/data")
+        });
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async move {
+            let store = PersistentGraph::open(&data).expect("open persistent store");
+            let llm = nylon_llm::llm_from_env();
+            let embedder = nylon_embed::embedder_from_env(dims);
+            let svc = service::EngineService::new(store, dims, embedder, llm);
+            if let Err(e) = mcp::run_stdio(svc).await {
+                eprintln!("mcp server error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
     println!("nylon-engine v0.1.0 (Phase 1 scaffold)");
 
     // 构建一个迷你记忆网：机票 -> 出差偏好 -> 酒店偏好 / 上次出差时间
