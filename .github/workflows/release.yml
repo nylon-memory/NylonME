@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: nylonme-linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: nylonme-windows-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: nylonme-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler clang libclang-dev pkg-config libssl-dev
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install system deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y protoc
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      - name: Build engine + CLI
+        working-directory: engine
+        run: cargo build --release --locked --target ${{ matrix.target }} -p nylon-engine --example nylon_cli --example smoke_client
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.asset }}
+          cp engine/target/${{ matrix.target }}/release/nylon-engine dist/${{ matrix.asset }}/
+          cp engine/target/${{ matrix.target }}/release/examples/nylon_cli dist/${{ matrix.asset }}/
+          cp engine/target/${{ matrix.target }}/release/examples/smoke_client dist/${{ matrix.asset }}/
+          cp README.md LICENSE dist/${{ matrix.asset }}/
+          tar -czf ${{ matrix.asset }}.tar.gz -C dist ${{ matrix.asset }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/${{ matrix.asset }} | Out-Null
+          Copy-Item engine/target/${{ matrix.target }}/release/nylon-engine.exe dist/${{ matrix.asset }}/
+          Copy-Item engine/target/${{ matrix.target }}/release/examples/nylon_cli.exe dist/${{ matrix.asset }}/
+          Copy-Item engine/target/${{ matrix.target }}/release/examples/smoke_client.exe dist/${{ matrix.asset }}/
+          Copy-Item README.md, LICENSE dist/${{ matrix.asset }}/
+          Compress-Archive -Path dist/${{ matrix.asset }} -DestinationPath ${{ matrix.asset }}.zip
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.asset }}.tar.gz
+            ${{ matrix.asset }}.zip
+          generate_release_notes: true
