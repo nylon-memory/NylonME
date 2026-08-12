@@ -1,9 +1,27 @@
 # NylonME — 尼龙记忆引擎
 
+[English](README.md) | 简体中文
+
 > 面向 AI Agent 的单机记忆引擎：记忆丝多维修织 · 网状记忆图 · 张力遗忘 · 情境共振
-> 状态：早期开发（Phase 1，API 尚不稳定）
+> 状态：Phase 2 活跃开发中（API 仍可能演进）
 
 NylonME 把一条记忆建模为多股"丝"（事实/情感/时序/关系/置信/频次）的编织体，记忆节点之间以加权边构成网状图而非层级树。检索不是 top-k 相似度匹配，而是"情境共振"：从种子节点出发，按关联强度 × 情境匹配 × 实时张力在图上扩散激活，并受全局激活预算约束（防止高扇出节点扩散爆炸）。不使用的记忆会沿张力遗忘曲线自然沉降，而不是无限堆积。
+
+## 评测成绩
+
+LoCoMo 证据召回 recall@10，全量 10 会话语料（1536 个可答 QA，词面+向量融合检索）：
+
+| 阶段 | recall@10 |
+|---|---|
+| 词面基线 | 47.1% |
+| +向量种子（bge-m3）+图 | 70.6% |
+| +双层写入（叶子层原文 + session 级 LLM 事实） | 79.2% |
+| +自适应联想深度（Cat4 单跳查询不扩散） | 80.1% |
+| +查询向量重排激活集 | **84.6%** |
+
+分类表现（全量）：多跳 83.0%、时序 86.0%、常识 53.3%、单跳 88.0%。
+
+实验逼出来的两条设计铁律：**理解层在写入侧**（LLM 是记忆的编译器，把原始事件编译成可检索结构；查询侧 LLM 扩展实测净零），以及**两层必须共存**（只用抽象层检索会把分数拉到 67.3%）。
 
 ## 快速开始
 
@@ -13,33 +31,59 @@ cargo test          # 运行全部单元测试
 cargo run -p nylon-engine   # 运行自检演示
 ```
 
-演示输出（种子 = "机票"，任务情境 = "出差"）：
+以 gRPC 守护进程方式运行（RocksDB 持久化）：
 
+```bash
+NYLON_DATA_DIR=./data \
+NYLON_EMBED_URL=http://localhost:11434 NYLON_EMBED_MODEL=bge-m3 NYLON_EMBED_DIMS=1024 \
+cargo run --release -p nylon-engine -- serve 0.0.0.0:50051
 ```
-情境共振（种子=机票, 任务=出差）:
-  node 0: resonance=0.919  用户问机票
-  node 1: resonance=0.627  出差偏好：靠窗座位
-  node 2: resonance=0.310  酒店偏好：近地铁
-  node 3: resonance=0.247  上次出差：2026-06 上海
+
+可选的理解层（session 级事实编织，任意 OpenAI 兼容端点）：
+
+```bash
+NYLON_LLM_URL=https://api.deepseek.com/v1/chat/completions \
+NYLON_LLM_MODEL=deepseek-v4-flash NYLON_LLM_API_KEY=... NYLON_LLM_THINKING_OFF=1 ...
 ```
+
+内置一个小 CLI 便于手工操作：
+
+```bash
+cargo run --release --example nylon_cli -- resonate --owner alice --query "机票是什么时候订的" --budget 8
+cargo run --release --example nylon_cli -- weave --owner alice --fact "Alice 出差喜欢靠窗座位"
+```
+
+## 调参旋钮（环境变量）
+
+| 变量 | 默认值 | 作用 |
+|---|---|---|
+| `NYLON_MAX_SEEDS` | 20 | 种子集大小上限（词面+向量双通道） |
+| `NYLON_CAT{n}_MAX_HOPS` | — | 按查询类型覆盖扩散深度（`0` = 仅种子，不扩散） |
+| `NYLON_RERANK_VEC` | 0 | 查询向量余弦相似度混入共振排序的权重 |
+| `NYLON_TENSION_FLOOR` | 0 | 排序时的张力下限（不改节点状态） |
+| `NYLON_SEED_QUOTA` | 0 | 输出中给直接命中种子的保底前排名额 |
+| `NYLON_DERIVED_EDGES` | 关 | 抽象层→叶子的显式边（实测对时序/常识负收益，保持关闭） |
 
 ## 仓库结构
 
 ```
 NylonME/
-├── proto/            # nylon/v1 gRPC 契约（Weave / Resonate / Search / GetNode）
+├── proto/            # nylon/v1 gRPC 契约（Weave / WeaveSession / Resonate / Search / GetNode）
 └── engine/           # Rust workspace
     └── crates/
-        ├── nylon-core    # 记忆丝数据模型 + 张力遗忘公式（logistic 归一化）
-        ├── nylon-graph   # CSR 主图 + Delta 缓冲 + 共振遍历（优先级队列 + 全局预算）
-        ├── nylon-vector  # 向量索引抽象（当前为暴力余弦基线，HNSW 开发中）
-        └── nylon-engine  # 引擎入口（gRPC 服务化进行中）
+        ├── nylon-core    # 记忆丝数据模型 + 张力遗忘
+        ├── nylon-graph   # CSR 主图 + Delta 缓冲 + 共振遍历
+        ├── nylon-vector  # HNSW 向量索引
+        ├── nylon-embed   # 嵌入客户端（ollama / OpenAI 兼容）
+        ├── nylon-llm     # 理解层：事实编织、冲突检测
+        ├── nylon-storage # RocksDB 持久化（WAL + 快照，崩溃恢复）
+        └── nylon-engine  # 引擎入口 + gRPC 服务（tonic）
 ```
 
-## 当前状态与路线图
+## 路线图
 
-已完成：核心数据模型、CSR + Delta 增量图、共振遍历、向量检索基线。
-进行中：HNSW 索引、gRPC 服务化（tonic）、RocksDB 持久化、Python SDK。
+已完成：双层写入引擎（WeaveSession）、词面+向量混合种子、自适应联想深度、查询向量重排、HNSW、RocksDB 持久化、gRPC 服务化、LoCoMo 84.6%。
+下一步：常识推理召回路径（Cat3 目前 53.3%）、交叉编码器 reranker、Python SDK、百万节点内存 profiling、论文与博客系列。
 
 ## 贡献
 
