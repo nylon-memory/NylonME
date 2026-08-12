@@ -23,6 +23,24 @@ LoCoMo 证据召回 recall@10，全量 10 会话语料（1536 个可答 QA，词
 
 实验逼出来的两条设计铁律：**理解层在写入侧**（LLM 是记忆的编译器，把原始事件编译成可检索结构；查询侧 LLM 扩展实测净零），以及**两层必须共存**（只用抽象层检索会把分数拉到 67.3%）。
 
+
+## 2 分钟接入你的 Agent（MCP）
+
+`nylon-engine mcp` 以 stdio 方式讲 Model Context Protocol，引擎**内嵌在进程里**——不用起守护进程、不用开端口，数据自动落盘 `~/.nylonme/data`。从 [Releases](https://github.com/nylon-memory/NylonME/releases) 下载二进制，在 MCP 客户端配置里加一段：
+
+```json
+{
+  "mcpServers": {
+    "nylonme": {
+      "command": "/path/to/nylon-engine",
+      "args": ["mcp"],
+      "env": { "NYLON_OWNER": "my-project" }
+    }
+  }
+}
+```
+
+Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。Agent 会获得三个工具：`memory_weave`（沉淀事实）、`memory_resonate`（回忆相关记忆）、`memory_get`（按 ID 读取）。各客户端的详细配置见 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
 ## 快速开始
 
 ```bash

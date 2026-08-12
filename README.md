@@ -23,6 +23,24 @@ Per-category (full corpus): multi-hop 83.0%, temporal 86.0%, commonsense 53.3%, 
 
 Two design rules the experiments forced on us: the **understanding layer lives on the write side** (the LLM is a compiler that turns raw events into retrievable structure; query-side LLM expansion measured net-zero), and **both layers must coexist** (abstract-layer-only retrieval drops the score to 67.3%).
 
+
+## Use from Your Agent in 2 Minutes (MCP)
+
+`nylon-engine mcp` speaks the Model Context Protocol over stdio with the engine **embedded** — no daemon, no ports; data lands in `~/.nylonme/data` automatically. Download a binary from [Releases](https://github.com/nylon-memory/NylonME/releases) and point your MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "nylonme": {
+      "command": "/path/to/nylon-engine",
+      "args": ["mcp"],
+      "env": { "NYLON_OWNER": "my-project" }
+    }
+  }
+}
+```
+
+Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your agent gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node). See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for per-client setup.
 ## Quick Start
 
 ```bash
