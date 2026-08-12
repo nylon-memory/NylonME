@@ -71,7 +71,9 @@ impl Eq for Scored {}
 
 impl Ord for Scored {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.total_cmp(&other.0).then_with(|| self.1.cmp(&other.1))
+        self.0
+            .total_cmp(&other.0)
+            .then_with(|| self.1.cmp(&other.1))
     }
 }
 
@@ -413,7 +415,10 @@ impl VectorIndex for HnswIndex {
                 let w = self.search_layer(q, &[cur], self.ef_construction, lc);
                 let cap = if lc == 0 { self.m_max0 } else { self.m };
                 cur = w[0].0; // 最近候选作为下一层入口
-                plan.push((lc, self.select_neighbors_heuristic(q, w, cap, true, true, lc)));
+                plan.push((
+                    lc,
+                    self.select_neighbors_heuristic(q, w, cap, true, true, lc),
+                ));
             }
             plan
         };
@@ -475,7 +480,10 @@ mod tests {
 
     impl VecGen {
         fn new(seed: u64, dims: usize) -> Self {
-            VecGen { rng: XorShift64(seed), dims }
+            VecGen {
+                rng: XorShift64(seed),
+                dims,
+            }
         }
 
         fn next_vec(&mut self) -> Vec<f32> {
@@ -617,7 +625,10 @@ mod tests {
                     top1 += 1;
                 }
             }
-            eprintln!("ef={ef}: recall@100={:.4}, top1_hit={top1}/{nq}", total / nq as f64);
+            eprintln!(
+                "ef={ef}: recall@100={:.4}, top1_hit={top1}/{nq}",
+                total / nq as f64
+            );
         }
     }
 
@@ -649,17 +660,25 @@ mod tests {
         for (i, v) in vectors.iter().enumerate() {
             brute.add(i as u32, v);
         }
-        let truths: Vec<Vec<(u32, f32)>> =
-            (0..truth_q).map(|qi| brute.search(&queries[qi], k)).collect();
+        let truths: Vec<Vec<(u32, f32)>> = (0..truth_q)
+            .map(|qi| brute.search(&queries[qi], k))
+            .collect();
 
         // 两个工作点：默认 ef（k=100 时实际 ef=100）与高召回点 ef=500
         eprintln!("=== HNSW bench: n={n}, dims={dims}, M=16, ef_construction=200 ===");
-        eprintln!("build: {build:.2?} ({:.0} vec/s)", n as f64 / build.as_secs_f64());
+        eprintln!(
+            "build: {build:.2?} ({:.0} vec/s)",
+            n as f64 / build.as_secs_f64()
+        );
         for ef in [0usize, 500] {
             if ef > 0 {
                 hnsw.set_ef_search(ef);
             }
-            let label = if ef == 0 { format!("ef=100 (默认 max(ef_search={} , k))", hnsw.ef_search()) } else { format!("ef={ef}") };
+            let label = if ef == 0 {
+                format!("ef=100 (默认 max(ef_search={} , k))", hnsw.ef_search())
+            } else {
+                format!("ef={ef}")
+            };
             let mut lat: Vec<f64> = Vec::with_capacity(nq);
             let mut approx: Vec<Vec<(u32, f32)>> = Vec::with_capacity(nq);
             for q in &queries {

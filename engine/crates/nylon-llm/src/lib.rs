@@ -79,7 +79,12 @@ impl HttpChatModel {
             .timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        HttpChatModel { client, url: url.into(), model: model.into(), api_key }
+        HttpChatModel {
+            client,
+            url: url.into(),
+            model: model.into(),
+            api_key,
+        }
     }
 }
 
@@ -97,7 +102,10 @@ fn parse_json_loose(text: &str) -> Result<serde_json::Value, LlmError> {
             }
         }
     }
-    Err(LlmError(format!("响应不是 JSON: {}", &t[t.len().saturating_sub(200)..])))
+    Err(LlmError(format!(
+        "响应不是 JSON: {}",
+        &t[t.len().saturating_sub(200)..]
+    )))
 }
 
 #[async_trait::async_trait]
@@ -105,8 +113,19 @@ impl ChatModel for HttpChatModel {
     async fn chat_json(&self, system: &str, user: &str) -> Result<serde_json::Value, LlmError> {
         let req = ChatReq {
             model: &self.model,
-            messages: [Msg { role: "system", content: system }, Msg { role: "user", content: user }],
-            response_format: RespFmt { kind: "json_object" },
+            messages: [
+                Msg {
+                    role: "system",
+                    content: system,
+                },
+                Msg {
+                    role: "user",
+                    content: user,
+                },
+            ],
+            response_format: RespFmt {
+                kind: "json_object",
+            },
             temperature: 0.0,
             max_tokens: 1536,
             // NYLON_LLM_THINKING_OFF=1 时请求关闭推理（deepseek-v4-flash 等推理模型会烧光 token 预算导致 JSON 截断）
@@ -183,9 +202,12 @@ mod tests {
     #[test]
     fn parse_json_loose_handles_markdown() {
         // raw string avoids escape issues: input is markdown-wrapped JSON
-        let v = parse_json_loose(r#"```json
+        let v = parse_json_loose(
+            r#"```json
 {"a": 1}
-```"#).unwrap();
+```"#,
+        )
+        .unwrap();
         assert_eq!(v["a"], 1);
         let v = parse_json_loose(r#"{"b": 2}"#).unwrap();
         assert_eq!(v["b"], 2);

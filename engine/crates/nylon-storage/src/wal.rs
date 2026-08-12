@@ -40,7 +40,11 @@ fn encode_node(node: &MemoryNode) -> Vec<u8> {
 
 fn decode_node(buf: &[u8]) -> Option<MemoryNode> {
     let nodes = decode_nodes(buf).ok()?;
-    if nodes.len() == 1 { nodes.into_iter().next() } else { None }
+    if nodes.len() == 1 {
+        nodes.into_iter().next()
+    } else {
+        None
+    }
 }
 
 fn push_u32(buf: &mut Vec<u8>, v: u32) {
@@ -51,7 +55,11 @@ fn encode_op(op: &WalOp) -> Vec<u8> {
     let mut buf = Vec::new();
     match op {
         WalOp::PutNode { id, node } | WalOp::UpdateNode { id, node } => {
-            buf.push(if matches!(op, WalOp::PutNode { .. }) { 1 } else { 5 });
+            buf.push(if matches!(op, WalOp::PutNode { .. }) {
+                1
+            } else {
+                5
+            });
             push_u32(&mut buf, *id);
             let nb = encode_node(node);
             push_u32(&mut buf, nb.len() as u32);
@@ -98,18 +106,32 @@ impl<'a> Reader<'a> {
 }
 
 fn decode_op(payload: &[u8]) -> Option<WalOp> {
-    let mut r = Reader { buf: payload, pos: 0 };
+    let mut r = Reader {
+        buf: payload,
+        pos: 0,
+    };
     let tag = *r.take(1)?.first()?;
     match tag {
         1 | 5 => {
             let id = r.u32()?;
             let len = r.u32()? as usize;
             let node = decode_node(r.take(len)?)?;
-            Some(if tag == 1 { WalOp::PutNode { id, node } } else { WalOp::UpdateNode { id, node } })
+            Some(if tag == 1 {
+                WalOp::PutNode { id, node }
+            } else {
+                WalOp::UpdateNode { id, node }
+            })
         }
         2 => Some(WalOp::RemoveNode { id: r.u32()? }),
-        3 => Some(WalOp::PutEdge { from: r.u32()?, to: r.u32()?, weight: r.f32()? }),
-        4 => Some(WalOp::RemoveEdge { from: r.u32()?, to: r.u32()? }),
+        3 => Some(WalOp::PutEdge {
+            from: r.u32()?,
+            to: r.u32()?,
+            weight: r.f32()?,
+        }),
+        4 => Some(WalOp::RemoveEdge {
+            from: r.u32()?,
+            to: r.u32()?,
+        }),
         _ => None,
     }
 }
@@ -130,7 +152,12 @@ struct Ack {
 impl Ack {
     fn pair() -> (Ack, DurabilityTicket) {
         let state = Arc::new((Mutex::new(None), Condvar::new()));
-        (Ack { state: state.clone() }, DurabilityTicket { state })
+        (
+            Ack {
+                state: state.clone(),
+            },
+            DurabilityTicket { state },
+        )
     }
     fn reply(self, r: io::Result<()>) {
         let (lock, cv) = &*self.state;
@@ -271,7 +298,12 @@ impl Wal {
     /// fsync 成本），生产环境严禁使用。
     pub fn open(dir: &Path) -> io::Result<(Wal, Vec<WalOp>)> {
         let path = dir.join(WAL_FILE);
-        let mut file = OpenOptions::new().read(true).write(true).create(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
         let ops = replay_file(&mut file)?;
         file.seek(SeekFrom::End(0))?;
         let fsync = std::env::var_os("NYLON_WAL_NO_FSYNC").is_none();
@@ -279,15 +311,24 @@ impl Wal {
         let handle = std::thread::Builder::new()
             .name("nylon-wal-writer".into())
             .spawn(move || writer_loop(file, fsync, rx))?;
-        Ok((Wal { tx: Some(tx), handle: Some(handle) }, ops))
+        Ok((
+            Wal {
+                tx: Some(tx),
+                handle: Some(handle),
+            },
+            ops,
+        ))
     }
 
     /// 提交一条操作，立即返回持久化票据（不阻塞等刷盘）。
     pub fn append(&self, op: &WalOp) -> io::Result<DurabilityTicket> {
         let (ack, ticket) = Ack::pair();
         let tx = self.tx.as_ref().expect("wal open");
-        tx.send(WalMsg::Append { frame: frame(op), ack })
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "wal 写线程已退出"))?;
+        tx.send(WalMsg::Append {
+            frame: frame(op),
+            ack,
+        })
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "wal 写线程已退出"))?;
         Ok(ticket)
     }
 

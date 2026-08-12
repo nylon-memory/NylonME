@@ -17,8 +17,17 @@ async fn main() {
     let tenant = arg(&args, "--tenant").unwrap_or_else(|| "codex".into());
     let owner = arg(&args, "--owner").unwrap_or_else(|| "default".into());
     let task = arg(&args, "--task");
-    let mut client = MemoryEngineClient::connect(addr).await.expect("connect failed");
-    let ctx = |hops: Option<u32>| Some(ContextSpectrum { task: task.clone(), emotion_valence: None, device: None, max_hops: hops });
+    let mut client = MemoryEngineClient::connect(addr)
+        .await
+        .expect("connect failed");
+    let ctx = |hops: Option<u32>| {
+        Some(ContextSpectrum {
+            task: task.clone(),
+            emotion_valence: None,
+            device: None,
+            max_hops: hops,
+        })
+    };
 
     match cmd {
         "weave" => {

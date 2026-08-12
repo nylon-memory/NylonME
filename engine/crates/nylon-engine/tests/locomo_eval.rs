@@ -60,7 +60,8 @@ async fn weave_turns(
 #[tokio::test]
 #[ignore = "需要 LoCoMo 数据集（NYLON_LOCOMO_PATH），手动运行"]
 async fn locomo_evidence_recall() {
-    let path = std::env::var("NYLON_LOCOMO_PATH").expect("请设置 NYLON_LOCOMO_PATH 指向 locomo10.json");
+    let path =
+        std::env::var("NYLON_LOCOMO_PATH").expect("请设置 NYLON_LOCOMO_PATH 指向 locomo10.json");
     let limit: usize = std::env::var("NYLON_LOCOMO_LIMIT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -71,10 +72,15 @@ async fn locomo_evidence_recall() {
         std::env::var(format!("NYLON_CAT{cat}_MAX_HOPS"))
             .ok()
             .and_then(|v| v.parse().ok())
-            .or_else(|| std::env::var("NYLON_MAX_HOPS").ok().and_then(|v| v.parse().ok()))
+            .or_else(|| {
+                std::env::var("NYLON_MAX_HOPS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+            })
     };
     let data: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败")).expect("解析 JSON 失败");
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败"))
+            .expect("解析 JSON 失败");
 
     // 内存端口起服务
     let dir = tempfile::tempdir().unwrap();
@@ -90,18 +96,18 @@ async fn locomo_evidence_recall() {
     let query_expand = std::env::var("NYLON_QUERY_EXPAND").is_ok() && llm_on;
     if embedder_on {
         println!("[eval] 嵌入通道已启用 (NYLON_EMBED_URL), dims={dims}");
-    if llm_on {
-        println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
-    } else {
-        println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
-    }
+        if llm_on {
+            println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
+        } else {
+            println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
+        }
     } else {
         println!("[eval] 未配置 NYLON_EMBED_URL，走纯词面口径 (dims={dims})");
-    if llm_on {
-        println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
-    } else {
-        println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
-    }
+        if llm_on {
+            println!("[eval] LLM 通道已启用 (NYLON_LLM_URL)，编织分解开启");
+        } else {
+            println!("[eval] 未配置 NYLON_LLM_URL，走启发式分解");
+        }
     }
     // session 级编织（引擎内建双层写入），NYLON_SESSION_WEAVE=1 启用
     let session_weave = std::env::var("NYLON_SESSION_WEAVE").is_ok() && llm_on;
@@ -109,7 +115,11 @@ async fn locomo_evidence_recall() {
         println!("[eval] session 级编织已启用 (NYLON_SESSION_WEAVE=1, 引擎内建双层写入)");
     }
     // 引擎需要 LLM 的场景：逐事件分解（NYLON_WEAVE_LLM）或 session 抽象层（NYLON_SESSION_WEAVE）
-    let svc_llm = if std::env::var("NYLON_WEAVE_LLM").is_ok() || session_weave { llm.clone() } else { None };
+    let svc_llm = if std::env::var("NYLON_WEAVE_LLM").is_ok() || session_weave {
+        llm.clone()
+    } else {
+        None
+    };
     let expander = llm.clone(); // 查询扩展专用（NYLON_QUERY_EXPAND=1 启用）
     let svc = EngineService::new(store, dims, embedder, svc_llm);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -131,32 +141,37 @@ async fn locomo_evidence_recall() {
 
     for conv in data.as_array().expect("顶层应为数组").iter().take(limit) {
         let sample = conv["sample_id"].as_str().unwrap_or("unknown").to_string();
-        let conv_obj = conv["conversation"].as_object().expect("conversation 应为对象");
+        let conv_obj = conv["conversation"]
+            .as_object()
+            .expect("conversation 应为对象");
 
         // 按 session 数字序织入全部轮次
         let mut sessions: Vec<&String> = conv_obj
             .keys()
             .filter(|k| k.starts_with("session_") && !k.ends_with("_date_time"))
             .collect();
-        sessions.sort_by_key(|k| {
-            k.trim_start_matches("session_").parse::<u32>().unwrap_or(0)
-        });
+        sessions.sort_by_key(|k| k.trim_start_matches("session_").parse::<u32>().unwrap_or(0));
 
         let mut dia2nodes: HashMap<String, Vec<u64>> = HashMap::new();
         for sess in sessions {
             let turns = conv_obj[sess].as_array().cloned().unwrap_or_default();
             if session_weave {
                 // 引擎内建双层写入：一次 RPC 完成叶子层+抽象层+层间边
-                let events: Vec<SessionEvent> = turns.iter().filter_map(|t| {
-                    let dia = t["dia_id"].as_str().unwrap_or("");
-                    let text = t["text"].as_str().unwrap_or("");
-                    if dia.is_empty() || text.is_empty() { return None; }
-                    Some(SessionEvent {
-                        event_id: dia.to_string(),
-                        speaker: t["speaker"].as_str().unwrap_or("").to_string(),
-                        text: text.to_string(),
+                let events: Vec<SessionEvent> = turns
+                    .iter()
+                    .filter_map(|t| {
+                        let dia = t["dia_id"].as_str().unwrap_or("");
+                        let text = t["text"].as_str().unwrap_or("");
+                        if dia.is_empty() || text.is_empty() {
+                            return None;
+                        }
+                        Some(SessionEvent {
+                            event_id: dia.to_string(),
+                            speaker: t["speaker"].as_str().unwrap_or("").to_string(),
+                            text: text.to_string(),
+                        })
                     })
-                }).collect();
+                    .collect();
                 if !events.is_empty() {
                     let resp = client
                         .weave_session(WeaveSessionRequest {
@@ -170,7 +185,10 @@ async fn locomo_evidence_recall() {
                         .into_inner();
                     for en in &resp.leaf_nodes {
                         if !en.event_id.is_empty() {
-                            dia2nodes.entry(en.event_id.clone()).or_default().push(en.node_id);
+                            dia2nodes
+                                .entry(en.event_id.clone())
+                                .or_default()
+                                .push(en.node_id);
                         }
                     }
                     for f in &resp.fact_nodes {
@@ -179,11 +197,24 @@ async fn locomo_evidence_recall() {
                         }
                     }
                     total_turns += resp.leaf_nodes.len() + resp.fact_nodes.len();
-                    println!("[eval] {} 双层写入: {} 叶子 + {} 事实 (累计 {})", sess, resp.leaf_nodes.len(), resp.fact_nodes.len(), total_turns);
+                    println!(
+                        "[eval] {} 双层写入: {} 叶子 + {} 事实 (累计 {})",
+                        sess,
+                        resp.leaf_nodes.len(),
+                        resp.fact_nodes.len(),
+                        total_turns
+                    );
                 }
                 continue;
             }
-            weave_turns(&mut client, &sample, &turns, &mut dia2nodes, &mut total_turns).await;
+            weave_turns(
+                &mut client,
+                &sample,
+                &turns,
+                &mut dia2nodes,
+                &mut total_turns,
+            )
+            .await;
         }
 
         // 对每个可答 QA 跑共振检索
@@ -204,7 +235,9 @@ async fn locomo_evidence_recall() {
             }
             let question = qa["question"].as_str().unwrap_or("");
             let expanded = if query_expand {
-                expand_query(expander.as_deref(), question).await.unwrap_or_else(|| question.to_string())
+                expand_query(expander.as_deref(), question)
+                    .await
+                    .unwrap_or_else(|| question.to_string())
             } else {
                 question.to_string()
             };
@@ -219,19 +252,33 @@ async fn locomo_evidence_recall() {
                         device: None,
                         max_hops: Some(h),
                     }),
-                    budget: std::env::var("NYLON_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(32),
+                    budget: std::env::var("NYLON_BUDGET")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(32),
                 })
                 .await
                 .unwrap()
                 .into_inner();
-            let got: Vec<u64> = resp.activated.iter().take(RECALL_K).map(|a| a.node_id).collect();
-            let ok = evidence
+            let got: Vec<u64> = resp
+                .activated
                 .iter()
-                .any(|e| dia2nodes.get(e).map(|ns| ns.iter().any(|n| got.contains(n))).unwrap_or(false));
+                .take(RECALL_K)
+                .map(|a| a.node_id)
+                .collect();
+            let ok = evidence.iter().any(|e| {
+                dia2nodes
+                    .get(e)
+                    .map(|ns| ns.iter().any(|n| got.contains(n)))
+                    .unwrap_or(false)
+            });
             // 种子层召回：证据是否直接进入种子集（不扩散的理论上限）
-            let seed_hit = evidence
-                .iter()
-                .any(|e| dia2nodes.get(e).map(|ns| ns.iter().any(|n| resp.seed_ids.contains(n))).unwrap_or(false));
+            let seed_hit = evidence.iter().any(|e| {
+                dia2nodes
+                    .get(e)
+                    .map(|ns| ns.iter().any(|n| resp.seed_ids.contains(n)))
+                    .unwrap_or(false)
+            });
             total += 1;
             if ok {
                 hit += 1;
@@ -251,7 +298,14 @@ async fn locomo_evidence_recall() {
     }
 
     println!();
-    println!("=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, {} 口径） ===", if embedder_on { "词面+向量融合" } else { "纯词面" });
+    println!(
+        "=== LoCoMo 子集评测（证据召回 recall@{RECALL_K}, {} 口径） ===",
+        if embedder_on {
+            "词面+向量融合"
+        } else {
+            "纯词面"
+        }
+    );
     println!("会话数: {limit}, 织入轮次: {total_turns}");
     for cat in 1..=4i64 {
         if let Ok(v) = std::env::var(format!("NYLON_CAT{cat}_MAX_HOPS")) {
@@ -262,16 +316,25 @@ async fn locomo_evidence_recall() {
         println!("Global ablation active: max_hops={v}");
     }
     if total > 0 {
-        println!("有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%", hit as f64 / total as f64 * 100.0);
+        println!(
+            "有效 QA: {total}, 命中: {hit}, recall@{RECALL_K} = {:.1}%",
+            hit as f64 / total as f64 * 100.0
+        );
     } else {
         println!("无有效 QA");
     }
-    println!("种子层召回: {seed_total_hit}/{total} = {:.1}%", seed_total_hit as f64 / total.max(1) as f64 * 100.0);
+    println!(
+        "种子层召回: {seed_total_hit}/{total} = {:.1}%",
+        seed_total_hit as f64 / total.max(1) as f64 * 100.0
+    );
     let mut cats: Vec<_> = per_cat.iter().map(|(c, v)| (*c, *v)).collect();
     cats.sort_by_key(|(c, _)| *c);
     for (cat, (t, h, sh)) in &cats {
-        println!("  category {cat}: 最终 {h}/{t} = {:.1}% | 种子 {sh}/{t} = {:.1}%",
-            *h as f64 / *t as f64 * 100.0, *sh as f64 / *t as f64 * 100.0);
+        println!(
+            "  category {cat}: 最终 {h}/{t} = {:.1}% | 种子 {sh}/{t} = {:.1}%",
+            *h as f64 / *t as f64 * 100.0,
+            *sh as f64 / *t as f64 * 100.0
+        );
     }
 }
 
@@ -280,8 +343,14 @@ async fn expand_query(llm: Option<&dyn nylon_llm::ChatModel>, question: &str) ->
     let llm = llm?;
     let system = "You are a search query expander for a conversation memory system. Given a question about past conversations, output ONLY valid JSON: {\"keywords\": [3-6 key entities, names, places, dates, or topics that likely appear verbatim in the original conversation]. Use the original language of the question. No explanations.";
     let v = llm.chat_json(system, question).await.ok()?;
-    let kws: Vec<String> = v.get("keywords")?.as_array()?
-        .iter().filter_map(|k| k.as_str().map(|s| s.to_string())).collect();
-    if kws.is_empty() { return None; }
+    let kws: Vec<String> = v
+        .get("keywords")?
+        .as_array()?
+        .iter()
+        .filter_map(|k| k.as_str().map(|s| s.to_string()))
+        .collect();
+    if kws.is_empty() {
+        return None;
+    }
     Some(format!("{question} {}", kws.join(" ")))
 }

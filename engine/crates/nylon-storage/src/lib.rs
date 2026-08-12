@@ -51,7 +51,10 @@ impl PersistentGraph {
     /// 写入节点（WAL 先行入队），返回分片内局部 ID 与持久化票据。
     pub fn add_node(&mut self, node: MemoryNode) -> io::Result<(u32, DurabilityTicket)> {
         let local = self.graph.peek_next_local_id();
-        let ticket = self.wal.append(&WalOp::PutNode { id: local, node: node.clone() })?;
+        let ticket = self.wal.append(&WalOp::PutNode {
+            id: local,
+            node: node.clone(),
+        })?;
         self.graph.add_node_with_id(local, node);
         Ok((local, ticket))
     }
@@ -64,8 +67,15 @@ impl PersistentGraph {
     }
 
     /// 更新节点（WAL-first）。节点不存在或已删除时返回 false。
-    pub fn update_node(&mut self, local_id: u32, node: MemoryNode) -> io::Result<(bool, DurabilityTicket)> {
-        let ticket = self.wal.append(&WalOp::UpdateNode { id: local_id, node: node.clone() })?;
+    pub fn update_node(
+        &mut self,
+        local_id: u32,
+        node: MemoryNode,
+    ) -> io::Result<(bool, DurabilityTicket)> {
+        let ticket = self.wal.append(&WalOp::UpdateNode {
+            id: local_id,
+            node: node.clone(),
+        })?;
         let applied = self.graph.update_node(local_id, node);
         Ok((applied, ticket))
     }
@@ -122,15 +132,14 @@ fn apply(graph: &mut MemoryGraph, op: WalOp) {
 
 // ---------- 快照编解码 ----------
 // 格式：SNP0 | next_local_id u32 | node_count u32
-//       | (local_id u32, payload_len u32, .nylon 编码节点)* 
+//       | (local_id u32, payload_len u32, .nylon 编码节点)*
 //       | edge_count u32 | (from u32, to u32, weight f32)*
 
 fn encode_snapshot(graph: &MemoryGraph) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(SNAPSHOT_MAGIC);
     buf.extend_from_slice(&graph.peek_next_local_id().to_le_bytes());
-    let nodes: Vec<(u32, MemoryNode)> =
-        graph.live_nodes().map(|(id, n)| (id, n.clone())).collect();
+    let nodes: Vec<(u32, MemoryNode)> = graph.live_nodes().map(|(id, n)| (id, n.clone())).collect();
     buf.extend_from_slice(&(nodes.len() as u32).to_le_bytes());
     for (id, node) in &nodes {
         buf.extend_from_slice(&id.to_le_bytes());
@@ -192,8 +201,11 @@ fn load_snapshot(path: &Path) -> io::Result<MemoryGraph> {
     for _ in 0..node_count {
         let id = c.u32().ok_or_else(|| invalid("truncated snapshot node"))?;
         let len = c.u32().ok_or_else(|| invalid("truncated snapshot node"))? as usize;
-        let payload = c.take(len).ok_or_else(|| invalid("truncated snapshot node"))?;
-        let nodes = decode_nodes(payload).map_err(|e| invalid(&format!("snapshot node decode: {e}")))?;
+        let payload = c
+            .take(len)
+            .ok_or_else(|| invalid("truncated snapshot node"))?;
+        let nodes =
+            decode_nodes(payload).map_err(|e| invalid(&format!("snapshot node decode: {e}")))?;
         if nodes.len() != 1 {
             return Err(invalid("snapshot node payload count mismatch"));
         }
@@ -231,14 +243,17 @@ mod tests {
                 confidence: 0.9,
                 mentions_7d: 1,
             },
-            tension: Tension { baseline: 0.8, last_updated: 0 },
+            tension: Tension {
+                baseline: 0.8,
+                last_updated: 0,
+            },
             embedding: vec![1.0, 2.0, 3.0],
         }
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("nylon-storage-test-{tag}-{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("nylon-storage-test-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         d
     }
@@ -295,8 +310,12 @@ mod tests {
         }
         // 追加半条损坏记录
         let wal_path = dir.join(wal::WAL_FILE);
-        fs::OpenOptions::new().append(true).open(&wal_path).unwrap()
-            .write_all(&[0xDE, 0xAD, 0xBE]).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&wal_path)
+            .unwrap()
+            .write_all(&[0xDE, 0xAD, 0xBE])
+            .unwrap();
         let pg = PersistentGraph::open(&dir).unwrap();
         assert_eq!(pg.graph().node_count(), 2);
         // 损坏尾部已被截断，继续写入不受影响

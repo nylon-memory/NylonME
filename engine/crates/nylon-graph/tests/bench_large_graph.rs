@@ -46,7 +46,10 @@ fn synth_node(i: usize, rng: &mut Lcg) -> MemoryNode {
             confidence: 0.9,
             mentions_7d: 0,
         },
-        tension: Tension { baseline: 0.8, last_updated: 0 },
+        tension: Tension {
+            baseline: 0.8,
+            last_updated: 0,
+        },
         embedding: vec![],
     }
 }

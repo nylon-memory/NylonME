@@ -164,7 +164,10 @@ pub fn decode_nodes(buf: &[u8]) -> Result<Vec<MemoryNode>, DecodeError> {
                 confidence,
                 mentions_7d,
             },
-            tension: Tension { baseline, last_updated },
+            tension: Tension {
+                baseline,
+                last_updated,
+            },
             embedding,
         });
     }
@@ -189,7 +192,10 @@ mod tests {
                 confidence: 0.9,
                 mentions_7d: 7,
             },
-            tension: Tension { baseline: 0.8, last_updated: 1_754_400_000 },
+            tension: Tension {
+                baseline: 0.8,
+                last_updated: 1_754_400_000,
+            },
             embedding,
         }
     }
@@ -199,7 +205,11 @@ mod tests {
         let nodes = vec![
             sample("用户喜欢 Python", &["编程", "工作"], vec![0.1, 0.2, 0.3]),
             sample("上次出差：上海，住了哪家酒店来着？", &["出差"], vec![]),
-            sample("空关系丝", &[], (0..768).map(|i| i as f32 * 0.001).collect()),
+            sample(
+                "空关系丝",
+                &[],
+                (0..768).map(|i| i as f32 * 0.001).collect(),
+            ),
         ];
         let bytes = encode_nodes(&nodes);
         let back = decode_nodes(&bytes).unwrap();

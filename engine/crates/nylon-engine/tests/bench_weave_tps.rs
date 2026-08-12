@@ -72,7 +72,10 @@ async fn weave_tps() {
     let tps = TOTAL as f64 / elapsed.as_secs_f64();
     println!();
     println!("=== Weave 写入吞吐基准 ===");
-    println!("总量 {TOTAL} ops, 并发 {WORKERS}, 耗时 {:.2}s", elapsed.as_secs_f64());
+    println!(
+        "总量 {TOTAL} ops, 并发 {WORKERS}, 耗时 {:.2}s",
+        elapsed.as_secs_f64()
+    );
     println!("端到端 TPS: {tps:.0} (目标 > 10000)");
     println!("WAL group commit 已上线：刷盘批量合并，等待在阻塞线程池");
 }

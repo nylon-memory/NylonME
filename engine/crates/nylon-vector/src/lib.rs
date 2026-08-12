@@ -41,7 +41,11 @@ pub struct BruteForceIndex {
 
 impl BruteForceIndex {
     pub fn new(dims: usize) -> Self {
-        BruteForceIndex { dims, ids: Vec::new(), data: Vec::new() }
+        BruteForceIndex {
+            dims,
+            ids: Vec::new(),
+            data: Vec::new(),
+        }
     }
 }
 
@@ -58,7 +62,12 @@ impl VectorIndex for BruteForceIndex {
             .ids
             .iter()
             .enumerate()
-            .map(|(i, &id)| (id, cosine(query, &self.data[i * self.dims..(i + 1) * self.dims])))
+            .map(|(i, &id)| {
+                (
+                    id,
+                    cosine(query, &self.data[i * self.dims..(i + 1) * self.dims]),
+                )
+            })
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         scored.truncate(k);

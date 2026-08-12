@@ -42,12 +42,22 @@ impl CsrGraph {
             weights[pos] = w;
             cursor[src as usize] += 1;
         }
-        CsrGraph { offsets: degree, targets, weights }
+        CsrGraph {
+            offsets: degree,
+            targets,
+            weights,
+        }
     }
 
     pub fn neighbors(&self, node: u32) -> impl Iterator<Item = (u32, f32)> + '_ {
-        let (s, e) = (self.offsets[node as usize] as usize, self.offsets[node as usize + 1] as usize);
-        self.targets[s..e].iter().zip(self.weights[s..e].iter()).map(|(&t, &w)| (t, w))
+        let (s, e) = (
+            self.offsets[node as usize] as usize,
+            self.offsets[node as usize + 1] as usize,
+        );
+        self.targets[s..e]
+            .iter()
+            .zip(self.weights[s..e].iter())
+            .map(|(&t, &w)| (t, w))
     }
 
     /// 定位 from→to 在 targets/weights 中的下标（O(出度) 线性扫描）。
@@ -55,7 +65,10 @@ impl CsrGraph {
         if (from as usize) + 1 >= self.offsets.len() {
             return None;
         }
-        let (s, e) = (self.offsets[from as usize] as usize, self.offsets[from as usize + 1] as usize);
+        let (s, e) = (
+            self.offsets[from as usize] as usize,
+            self.offsets[from as usize + 1] as usize,
+        );
         (s..e).find(|&i| self.targets[i] == to)
     }
 }
@@ -286,7 +299,10 @@ impl MemoryGraph {
     /// 关系丝倒排：某标签命中的存活节点（无序候选，供写路径早退遍历）。
     /// 不复刻节点集；索引与墓碑同步维护，集合内仅存活节点。
     pub fn relation_candidates(&self, tag: &str) -> impl Iterator<Item = u32> + '_ {
-        self.rel_index.get(tag).into_iter().flat_map(|set| set.iter().copied())
+        self.rel_index
+            .get(tag)
+            .into_iter()
+            .flat_map(|set| set.iter().copied())
     }
 
     fn rel_index_insert(index: &mut HashMap<String, HashSet<u32>>, id: u32, node: &MemoryNode) {
@@ -459,8 +475,7 @@ impl MemoryGraph {
                 merged.insert((src, t), w);
             }
         }
-        let edges: Vec<(u32, u32, f32)> =
-            merged.into_iter().map(|((s, t), w)| (s, t, w)).collect();
+        let edges: Vec<(u32, u32, f32)> = merged.into_iter().map(|((s, t), w)| (s, t, w)).collect();
         self.csr = CsrGraph::from_edges(num_nodes, &edges);
         self.delta = DeltaGraph::default();
         self.edge_tombstones.clear();
@@ -517,7 +532,11 @@ impl MemoryGraph {
         let mut best: HashMap<u32, f32> = HashMap::new();
         let max_depth = ctx.max_hops.map_or(MAX_DEPTH, |h| h.min(255) as u8);
         for &(s, w) in seeds {
-            heap.push(State { score: w.clamp(MIN_STRENGTH, 1.0), node: s, depth: 0 });
+            heap.push(State {
+                score: w.clamp(MIN_STRENGTH, 1.0),
+                node: s,
+                depth: 0,
+            });
         }
         while let Some(State { score, node, depth }) = heap.pop() {
             if depth > max_depth || score < MIN_STRENGTH {
@@ -526,8 +545,11 @@ impl MemoryGraph {
             if best.get(&node).is_some_and(|&b| b >= score) {
                 continue; // 已以更优强度处理过
             }
-            let Some(n) = self.get_node(node) else { continue };
-            let resonance = score * ctx.match_score(n) * compute_tension(n, now, 1.0).max(tension_floor);
+            let Some(n) = self.get_node(node) else {
+                continue;
+            };
+            let resonance =
+                score * ctx.match_score(n) * compute_tension(n, now, 1.0).max(tension_floor);
             best.insert(node, resonance);
             if best.len() >= budget {
                 break; // 全局激活预算：截断扩散
@@ -535,7 +557,11 @@ impl MemoryGraph {
             for (nb, w) in self.neighbors(node) {
                 let next = score * w * DECAY_FACTOR;
                 if next >= MIN_STRENGTH && best.get(&nb).is_none_or(|&b| b < next) {
-                    heap.push(State { score: next, node: nb, depth: depth + 1 });
+                    heap.push(State {
+                        score: next,
+                        node: nb,
+                        depth: depth + 1,
+                    });
                 }
             }
         }
@@ -543,7 +569,12 @@ impl MemoryGraph {
         out.sort_by(|a, b| b.1.total_cmp(&a.1));
         if seed_quota > 0 {
             let seed_set: HashSet<u32> = seeds.iter().map(|&(s, _)| s).collect();
-            let hoisted: Vec<(u32, f32)> = out.iter().copied().filter(|(id, _)| seed_set.contains(id)).take(seed_quota).collect();
+            let hoisted: Vec<(u32, f32)> = out
+                .iter()
+                .copied()
+                .filter(|(id, _)| seed_set.contains(id))
+                .take(seed_quota)
+                .collect();
             let hoisted_ids: HashSet<u32> = hoisted.iter().map(|&(id, _)| id).collect();
             let rest = out.into_iter().filter(|(id, _)| !hoisted_ids.contains(id));
             out = hoisted.into_iter().chain(rest).collect();
@@ -571,7 +602,10 @@ mod tests {
                 confidence: 0.9,
                 mentions_7d: 0,
             },
-            tension: Tension { baseline: 0.8, last_updated: 0 },
+            tension: Tension {
+                baseline: 0.8,
+                last_updated: 0,
+            },
             embedding: vec![],
         }
     }
@@ -602,7 +636,10 @@ mod tests {
         let out = g.resonate(&[(a, 1.0)], &ctx, 0, DEFAULT_BUDGET);
         let score_of = |id: u32| out.iter().find(|&&(n, _)| n == id).map(|&(_, s)| s);
         assert!(score_of(a) > score_of(b), "1 跳应弱于种子");
-        assert!(score_of(b).unwrap() > score_of(c).unwrap_or(0.0), "2 跳应进一步衰减");
+        assert!(
+            score_of(b).unwrap() > score_of(c).unwrap_or(0.0),
+            "2 跳应进一步衰减"
+        );
     }
 
     #[test]
@@ -611,7 +648,10 @@ mod tests {
         let a = g.add_node(node("seed", &[]));
         let b = g.add_node(node("neighbor", &[]));
         g.add_edge(a, b, 0.9);
-        let ctx0 = ContextSpectrum { max_hops: Some(0), ..Default::default() };
+        let ctx0 = ContextSpectrum {
+            max_hops: Some(0),
+            ..Default::default()
+        };
         let out0 = g.resonate(&[(a, 1.0)], &ctx0, 0, DEFAULT_BUDGET);
         assert_eq!(out0.len(), 1, "max_hops=0 只应返回种子节点");
         let outd = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
@@ -627,7 +667,11 @@ mod tests {
             g.add_edge(hub, leaf, 0.9);
         }
         let out = g.resonate(&[(hub, 1.0)], &ContextSpectrum::default(), 0, 32);
-        assert!(out.len() <= 32, "全局预算应截断星型扩散，实际 {}", out.len());
+        assert!(
+            out.len() <= 32,
+            "全局预算应截断星型扩散，实际 {}",
+            out.len()
+        );
     }
 
     #[test]
@@ -641,7 +685,10 @@ mod tests {
         assert_eq!(n.filaments.fact, "新事实");
         assert_eq!(n.filaments.relations, vec!["生活".to_string()]);
         assert_eq!(n.filaments.emotion_valence, -0.5);
-        assert!(!g.update_node(999, node("幽灵", &[])), "不存在的节点应返回 false");
+        assert!(
+            !g.update_node(999, node("幽灵", &[])),
+            "不存在的节点应返回 false"
+        );
     }
 
     #[test]
@@ -736,11 +783,19 @@ mod tests {
         let b = g.add_node(node_at("中", &[], 200));
         let c = g.add_node(node_at("晚", &[], 300));
         assert_eq!(g.find_by_time_range(150, 250), vec![b]);
-        assert_eq!(g.find_by_time_range(100, 300), vec![a, b, c], "闭区间边界应包含端点");
+        assert_eq!(
+            g.find_by_time_range(100, 300),
+            vec![a, b, c],
+            "闭区间边界应包含端点"
+        );
         assert_eq!(g.find_by_time_range(100, 100), vec![a]);
         assert!(g.find_by_time_range(400, 500).is_empty());
         g.remove_node(b);
-        assert_eq!(g.find_by_time_range(100, 300), vec![a, c], "已删除节点不应命中");
+        assert_eq!(
+            g.find_by_time_range(100, 300),
+            vec![a, c],
+            "已删除节点不应命中"
+        );
     }
 
     #[test]
@@ -762,7 +817,10 @@ mod tests {
         assert_eq!(g.node_count(), 3, "b 应被物理删除");
         assert!(g.get_node(b).is_none());
         assert_eq!(g.delta.edge_count, 0);
-        assert!(g.tombstones.is_empty() && g.edge_tombstones.is_empty(), "墓碑应被清空");
+        assert!(
+            g.tombstones.is_empty() && g.edge_tombstones.is_empty(),
+            "墓碑应被清空"
+        );
         assert!(g.neighbors(a).is_empty(), "a→b/a→c 都应被物理清除");
         let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
         let ids: Vec<u32> = out.iter().map(|&(n, _)| n).collect();
@@ -770,7 +828,10 @@ mod tests {
         // compact 后仍能正常写入
         g.add_edge(a, d, 0.7);
         let out = g.resonate(&[(a, 1.0)], &ContextSpectrum::default(), 0, DEFAULT_BUDGET);
-        assert!(out.iter().any(|&(n, _)| n == d), "compact 后新增边应立即可达");
+        assert!(
+            out.iter().any(|&(n, _)| n == d),
+            "compact 后新增边应立即可达"
+        );
     }
 
     #[test]
@@ -805,7 +866,10 @@ mod tests {
         let b = g.add_node(node("科幻小说", &["阅读"]));
         let c = g.add_node(node("出差报销", &["出差", "财务"]));
         // 单条件
-        let f = FilamentFilter { relations_any: Some(vec!["出差".into()]), ..Default::default() };
+        let f = FilamentFilter {
+            relations_any: Some(vec!["出差".into()]),
+            ..Default::default()
+        };
         assert_eq!(g.find_by_filaments(&f), vec![a, c]);
         // 多条件 AND
         let f = FilamentFilter {
@@ -821,7 +885,10 @@ mod tests {
         };
         assert_eq!(g.find_by_filaments(&f), vec![a, b, c], "任一标签命中");
         // 空过滤器返回全部活节点
-        assert_eq!(g.find_by_filaments(&FilamentFilter::default()), vec![a, b, c]);
+        assert_eq!(
+            g.find_by_filaments(&FilamentFilter::default()),
+            vec![a, b, c]
+        );
         // 墓碑排除
         g.remove_node(b);
         assert_eq!(g.find_by_filaments(&FilamentFilter::default()), vec![a, c]);

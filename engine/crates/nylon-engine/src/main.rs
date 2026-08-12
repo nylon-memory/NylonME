@@ -22,7 +22,10 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
             confidence: 0.9,
             mentions_7d: mentions,
         },
-        tension: Tension { baseline: 0.8, last_updated: 0 },
+        tension: Tension {
+            baseline: 0.8,
+            last_updated: 0,
+        },
         embedding: vec![],
     }
 }
@@ -30,7 +33,10 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(|s| s.as_str()) == Some("serve") {
-        let addr = args.get(2).cloned().unwrap_or_else(|| "127.0.0.1:50051".into());
+        let addr = args
+            .get(2)
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1:50051".into());
         let data = std::env::var("NYLON_DATA_DIR").unwrap_or_else(|_| "./nylon-data".into());
         let dims: usize = std::env::var("NYLON_EMBED_DIMS")
             .ok()
@@ -39,8 +45,8 @@ fn main() {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
             let store = PersistentGraph::open(&data).expect("open persistent store");
-                let llm = nylon_llm::llm_from_env();
-    let embedder = nylon_embed::embedder_from_env(dims);
+            let llm = nylon_llm::llm_from_env();
+            let embedder = nylon_embed::embedder_from_env(dims);
             if embedder.is_some() {
                 println!("嵌入通道已启用 (NYLON_EMBED_URL)");
             }
@@ -48,7 +54,9 @@ fn main() {
             let sock = addr.parse().expect("invalid listen addr");
             println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
             tonic::transport::Server::builder()
-                .add_service(service::pb::memory_engine_server::MemoryEngineServer::new(svc))
+                .add_service(service::pb::memory_engine_server::MemoryEngineServer::new(
+                    svc,
+                ))
                 .serve(sock)
                 .await
                 .expect("gRPC server");
@@ -70,12 +78,19 @@ fn main() {
     g.add_edge(trip, last, 0.7);
     g.add_edge(hobby, last, 0.1);
 
-    let ctx = ContextSpectrum { task: Some("出差".into()), emotion_valence: None, max_hops: None };
+    let ctx = ContextSpectrum {
+        task: Some("出差".into()),
+        emotion_valence: None,
+        max_hops: None,
+    };
     let activated = g.resonate(&[(flight, 1.0)], &ctx, 0, DEFAULT_BUDGET);
 
     println!("\n情境共振（种子=机票, 任务=出差）:");
     for (id, score) in &activated {
-        let fact = g.get_node(*id).map(|n| n.filaments.fact.as_str()).unwrap_or("?");
+        let fact = g
+            .get_node(*id)
+            .map(|n| n.filaments.fact.as_str())
+            .unwrap_or("?");
         println!("  node {id}: resonance={score:.3}  {fact}");
     }
     assert!(activated.len() >= 3, "应激活出差记忆簇");
@@ -89,12 +104,15 @@ fn main() {
     println!("\n向量 Top-1: node {} sim={:.3}", top[0].0, top[0].1);
 
     // .nylon 二进制编解码 roundtrip
-    let snapshot: Vec<MemoryNode> =
-        (0..5u32).filter_map(|i| g.get_node(i).cloned()).collect();
+    let snapshot: Vec<MemoryNode> = (0..5u32).filter_map(|i| g.get_node(i).cloned()).collect();
     let bytes = nylon_core::encode_nodes(&snapshot);
     let restored = nylon_core::decode_nodes(&bytes).expect("decode .nylon");
     assert_eq!(restored, snapshot, ".nylon roundtrip 应完全保真");
-    println!("\n.nylon 编解码: {} 节点 -> {} 字节, roundtrip 保真", snapshot.len(), bytes.len());
+    println!(
+        "\n.nylon 编解码: {} 节点 -> {} 字节, roundtrip 保真",
+        snapshot.len(),
+        bytes.len()
+    );
 
     // 六丝组合检索演示
     let hits = g.find_by_filaments(&FilamentFilter {
@@ -102,7 +120,11 @@ fn main() {
         min_confidence: Some(0.5),
         ..Default::default()
     });
-    println!("六丝检索（出差 + 置信>=0.5）: 命中 {} 个节点 {:?}", hits.len(), hits);
+    println!(
+        "六丝检索（出差 + 置信>=0.5）: 命中 {} 个节点 {:?}",
+        hits.len(),
+        hits
+    );
     assert_eq!(hits.len(), 4);
 
     // 持久化演示：WAL + 快照 + 崩溃恢复
@@ -110,15 +132,24 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir);
     {
         let mut pg = PersistentGraph::open(&dir).expect("open store");
-        let (a, _ticket_a) = pg.add_node(demo_node(101, "持久化节点 A", &["演示"], 1)).unwrap();
-        let (b, _ticket_b) = pg.add_node(demo_node(102, "持久化节点 B", &["演示"], 1)).unwrap();
+        let (a, _ticket_a) = pg
+            .add_node(demo_node(101, "持久化节点 A", &["演示"], 1))
+            .unwrap();
+        let (b, _ticket_b) = pg
+            .add_node(demo_node(102, "持久化节点 B", &["演示"], 1))
+            .unwrap();
         pg.add_edge(a, b, 0.9).unwrap();
         pg.checkpoint().unwrap();
         // checkpoint 后再写一条（只在 WAL 里），模拟未落快照的增量
-        pg.add_node(demo_node(103, "持久化节点 C（仅 WAL）", &["演示"], 0)).unwrap();
+        pg.add_node(demo_node(103, "持久化节点 C（仅 WAL）", &["演示"], 0))
+            .unwrap();
     } // drop = 模拟进程退出
     let pg = PersistentGraph::open(&dir).expect("reopen store");
-    assert_eq!(pg.graph().node_count(), 3, "快照 + WAL 重放应恢复全部 3 个节点");
+    assert_eq!(
+        pg.graph().node_count(),
+        3,
+        "快照 + WAL 重放应恢复全部 3 个节点"
+    );
     let c = pg.graph().get_node(2).expect("节点 C 应由 WAL 重放恢复");
     println!(
         "\n持久化: checkpoint + WAL 重放恢复 {} 节点, 仅 WAL 节点: {}",

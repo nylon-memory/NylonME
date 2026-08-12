@@ -53,7 +53,9 @@ pub fn freq_boost(mentions_7d: u32) -> f32 {
 pub fn compute_tension(node: &MemoryNode, now: i64, context_boost: f32) -> f32 {
     let days = (now - node.tension.last_updated).max(0) as f32 / 86_400.0;
     let decay = (-node.filaments.decay_rate * days).exp();
-    let t = node.tension.baseline * decay * freq_boost(node.filaments.mentions_7d)
+    let t = node.tension.baseline
+        * decay
+        * freq_boost(node.filaments.mentions_7d)
         * context_boost.clamp(0.0, 2.0);
     t.min(1.0)
 }
@@ -79,7 +81,10 @@ mod tests {
                 confidence: 0.9,
                 mentions_7d: mentions,
             },
-            tension: Tension { baseline: 0.5, last_updated: 0 },
+            tension: Tension {
+                baseline: 0.5,
+                last_updated: 0,
+            },
             embedding: vec![],
         }
     }
@@ -100,7 +105,10 @@ mod tests {
         assert!(hot <= 1.0, "张力上限 1.0");
         // logistic 有界：mentions 从 50 到 5000 提升应很小
         let extreme = compute_tension(&node(0.01, 5000), 0, 1.0);
-        assert!((extreme - hot).abs() < 0.05, "频率项应饱和: {hot} vs {extreme}");
+        assert!(
+            (extreme - hot).abs() < 0.05,
+            "频率项应饱和: {hot} vs {extreme}"
+        );
     }
 
     #[test]

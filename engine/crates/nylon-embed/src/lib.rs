@@ -53,7 +53,12 @@ struct EmbedItem {
 
 impl HttpEmbedder {
     /// url 为端点根（如 http://127.0.0.1:8080），内部拼 /v1/embeddings。
-    pub fn new(url: impl Into<String>, model: impl Into<String>, dims: usize, api_key: Option<String>) -> Self {
+    pub fn new(
+        url: impl Into<String>,
+        model: impl Into<String>,
+        dims: usize,
+        api_key: Option<String>,
+    ) -> Self {
         HttpEmbedder {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -71,7 +76,10 @@ impl HttpEmbedder {
 impl Embedder for HttpEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let endpoint = self.url.trim_end_matches('/').to_string() + "/v1/embeddings";
-        let mut req = self.client.post(&endpoint).json(&EmbedReq { model: &self.model, input: texts });
+        let mut req = self.client.post(&endpoint).json(&EmbedReq {
+            model: &self.model,
+            input: texts,
+        });
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }
@@ -84,11 +92,19 @@ impl Embedder for HttpEmbedder {
         }
         let parsed: EmbedResp = resp.json().await.map_err(|e| EmbedError(e.to_string()))?;
         if parsed.data.len() != texts.len() {
-            return Err(EmbedError(format!("返回 {} 条，期望 {} 条", parsed.data.len(), texts.len())));
+            return Err(EmbedError(format!(
+                "返回 {} 条，期望 {} 条",
+                parsed.data.len(),
+                texts.len()
+            )));
         }
         for item in &parsed.data {
             if item.embedding.len() != self.dims {
-                return Err(EmbedError(format!("维度 {} 与配置 {} 不符", item.embedding.len(), self.dims)));
+                return Err(EmbedError(format!(
+                    "维度 {} 与配置 {} 不符",
+                    item.embedding.len(),
+                    self.dims
+                )));
             }
         }
         Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
@@ -149,7 +165,6 @@ fn stub_embed(text: &str, dims: usize) -> Vec<f32> {
     v
 }
 
-
 /// 从环境变量构建嵌入器。
 ///
 /// 设置了 NYLON_EMBED_URL 时启用 HTTP 后端（OpenAI 兼容 /v1/embeddings），
@@ -159,7 +174,9 @@ pub fn embedder_from_env(dims: usize) -> Option<std::sync::Arc<dyn Embedder>> {
     let url = std::env::var("NYLON_EMBED_URL").ok()?;
     let model = std::env::var("NYLON_EMBED_MODEL").unwrap_or_else(|_| "bge-m3".into());
     let key = std::env::var("NYLON_EMBED_API_KEY").ok();
-    Some(std::sync::Arc::new(HttpEmbedder::new(url, model, dims, key)))
+    Some(std::sync::Arc::new(HttpEmbedder::new(
+        url, model, dims, key,
+    )))
 }
 
 #[cfg(test)]
@@ -175,7 +192,10 @@ mod tests {
         let c = emb.embed(&["出差订酒店".to_string()]).await.unwrap();
         let d = emb.embed(&["量子力学期末考试".to_string()]).await.unwrap();
         let sim = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(p, q)| p * q).sum::<f32>();
-        assert!(sim(&a[0], &c[0]) > sim(&a[0], &d[0]), "共享 n-gram 多的文本应更相似");
+        assert!(
+            sim(&a[0], &c[0]) > sim(&a[0], &d[0]),
+            "共享 n-gram 多的文本应更相似"
+        );
     }
 
     #[tokio::test]

@@ -79,7 +79,6 @@ fn realistic_node(i: usize) -> MemoryNode {
     }
 }
 
-
 /// 极简节点（与 bench_large_graph 同形状）：短事实丝、无关系丝，衡量纯结构开销。
 fn minimal_node(i: usize) -> MemoryNode {
     MemoryNode {
@@ -95,7 +94,10 @@ fn minimal_node(i: usize) -> MemoryNode {
             confidence: 0.9,
             mentions_7d: 0,
         },
-        tension: Tension { baseline: 0.8, last_updated: 0 },
+        tension: Tension {
+            baseline: 0.8,
+            last_updated: 0,
+        },
         embedding: Vec::new(),
     }
 }
@@ -113,9 +115,20 @@ fn profile_1m_nodes_10m_edges() {
 
     let minimal = std::env::var_os("NYLON_PROFILE_MINIMAL").is_some();
     for i in 0..NUM_NODES {
-        g.add_node(if minimal { minimal_node(i) } else { realistic_node(i) });
+        g.add_node(if minimal {
+            minimal_node(i)
+        } else {
+            realistic_node(i)
+        });
     }
-    println!("节点形状: {}", if minimal { "极简（NYLON_PROFILE_MINIMAL）" } else { "真实文本" });
+    println!(
+        "节点形状: {}",
+        if minimal {
+            "极简（NYLON_PROFILE_MINIMAL）"
+        } else {
+            "真实文本"
+        }
+    );
     let after_nodes = allocated_mb();
 
     let mut rng = Lcg(0x5EED_5EED_5EED_5EED);
@@ -137,10 +150,21 @@ fn profile_1m_nodes_10m_edges() {
     println!("=== 常驻内存 profiling：100 万节点 + 1000 万边 ===");
     println!("空图基线:        {base:.1} MB");
     println!("空图结构:        {after_new:.1} MB");
-    println!("节点填充后:      {after_nodes:.1} MB  (节点净增 {:.1} MB, {:.0} B/节点)", after_nodes - after_new, (after_nodes - after_new) * 1024.0 * 1024.0 / NUM_NODES as f64);
-    println!("+Delta 边后:       {after_delta:.1} MB  (边净增 {:.1} MB)", after_delta - after_nodes);
+    println!(
+        "节点填充后:      {after_nodes:.1} MB  (节点净增 {:.1} MB, {:.0} B/节点)",
+        after_nodes - after_new,
+        (after_nodes - after_new) * 1024.0 * 1024.0 / NUM_NODES as f64
+    );
+    println!(
+        "+Delta 边后:       {after_delta:.1} MB  (边净增 {:.1} MB)",
+        after_delta - after_nodes
+    );
     println!("compact 后稳态:   {after_compact:.1} MB  (目标 < 300 MB)");
     println!("构建耗时:        {:.1}s", elapsed.as_secs_f64());
-    let verdict = if after_compact < 300.0 { "达标" } else { "超标" };
+    let verdict = if after_compact < 300.0 {
+        "达标"
+    } else {
+        "超标"
+    };
     println!("结论: 100 万节点 + 1000 万边稳态常驻 {after_compact:.0} MB，{verdict}。");
 }
