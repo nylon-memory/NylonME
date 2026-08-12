@@ -165,8 +165,11 @@ fn main() {
         pg.add_edge(a, b, 0.9).unwrap();
         pg.checkpoint().unwrap();
         // checkpoint 后再写一条（只在 WAL 里），模拟未落快照的增量
-        pg.add_node(demo_node(103, "持久化节点 C（仅 WAL）", &["演示"], 0))
+        // 等待 WAL 落盘票据，否则 drop 时写线程可能尚未刷盘（真实服务路径由 group commit 等待）
+        let (_c, ticket_c) = pg
+            .add_node(demo_node(103, "持久化节点 C（仅 WAL）", &["演示"], 0))
             .unwrap();
+        ticket_c.wait().unwrap();
     } // drop = 模拟进程退出
     let pg = PersistentGraph::open(&dir).expect("reopen store");
     assert_eq!(

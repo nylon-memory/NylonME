@@ -231,7 +231,10 @@ fn writer_loop(mut file: File, fsync: bool, rx: Receiver<WalMsg>) {
     while let Ok(first) = rx.recv() {
         match first {
             WalMsg::Truncate { ack } => {
-                let r = file.set_len(0).and_then(|_| file.sync_all());
+                let r = file
+                    .set_len(0)
+                    .and_then(|_| file.seek(SeekFrom::Start(0)))
+                    .and_then(|_| file.sync_all());
                 ack.reply(r);
             }
             WalMsg::Append { frame: f0, ack: a0 } => {
@@ -246,7 +249,10 @@ fn writer_loop(mut file: File, fsync: bool, rx: Receiver<WalMsg>) {
                         }
                         Ok(WalMsg::Truncate { ack }) => {
                             flush(&mut file, fsync, &mut frames, &mut acks);
-                            let r = file.set_len(0).and_then(|_| file.sync_all());
+                            let r = file
+                                .set_len(0)
+                                .and_then(|_| file.seek(SeekFrom::Start(0)))
+                                .and_then(|_| file.sync_all());
                             ack.reply(r);
                         }
                         Err(_) => break,

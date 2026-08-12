@@ -251,6 +251,32 @@ mod tests {
         }
     }
 
+    /// 回归：checkpoint（截断 WAL）后再写入，重开必须能重放截断后的新记录。
+    /// 曾有的 bug：写线程 set_len(0) 后未 seek 回文件头，后续追加写在旧偏移处，
+    /// 重放读到全零前缀即判定文件损坏，截断点之后的 WAL 记录全部丢失。
+    #[test]
+    fn reopen_recovers_appends_after_checkpoint() {
+        let dir = temp_dir("wal-tail");
+        {
+            let mut pg = PersistentGraph::open(&dir).unwrap();
+            let (_a, ta) = pg.add_node(node(1, "甲")).unwrap();
+            let (_b, tb) = pg.add_node(node(2, "乙")).unwrap();
+            ta.wait().unwrap();
+            tb.wait().unwrap();
+            pg.checkpoint().unwrap();
+            // checkpoint 之后的 WAL 尾部写入（不落快照）
+            let (_c, tc) = pg.add_node(node(3, "丙")).unwrap();
+            tc.wait().unwrap();
+        }
+        let pg = PersistentGraph::open(&dir).unwrap();
+        assert_eq!(
+            pg.graph().node_count(),
+            3,
+            "checkpoint 后写入的节点应由 WAL 重放恢复"
+        );
+        assert_eq!(pg.graph().get_node(2).unwrap().filaments.fact, "丙");
+        let _ = fs::remove_dir_all(&dir);
+    }
     fn temp_dir(tag: &str) -> PathBuf {
         let d =
             std::env::temp_dir().join(format!("nylon-storage-test-{tag}-{}", std::process::id()));
