@@ -91,7 +91,7 @@ fn bench_1m_nodes_10m_edges() {
     for _ in 0..NUM_SEEDS {
         let seed = rng.below(NUM_NODES as u64) as u32;
         let t = Instant::now();
-        let out = g.resonate(&[seed], &ctx, 0, BENCH_BUDGET);
+        let out = g.resonate(&[(seed, 1.0)], &ctx, 0, BENCH_BUDGET);
         lat_us.push(t.elapsed().as_micros());
         assert!(!out.is_empty(), "种子自身应总在结果中");
         total_activated += out.len();

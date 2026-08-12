@@ -496,6 +496,23 @@ impl MemoryGraph {
         now: i64,
         budget: usize,
     ) -> Vec<(u32, f32)> {
+        self.resonate_opts(seeds, ctx, now, budget, 0.0, 0)
+    }
+
+    /// 带排序选项的共振。
+    /// tension_floor：参与排序的张力下限（只影响排序分，不改节点状态），
+    ///   避免老证据被时间衰减挤出前列；
+    /// seed_quota：输出中保底靠前的种子名额（按共振强度取前 N 个种子置顶），
+    ///   防止直接命中的种子被高张力扩散邻居挤掉。
+    pub fn resonate_opts(
+        &self,
+        seeds: &[(u32, f32)],
+        ctx: &ContextSpectrum,
+        now: i64,
+        budget: usize,
+        tension_floor: f32,
+        seed_quota: usize,
+    ) -> Vec<(u32, f32)> {
         let mut heap = BinaryHeap::new();
         let mut best: HashMap<u32, f32> = HashMap::new();
         let max_depth = ctx.max_hops.map_or(MAX_DEPTH, |h| h.min(255) as u8);
@@ -510,7 +527,7 @@ impl MemoryGraph {
                 continue; // 已以更优强度处理过
             }
             let Some(n) = self.get_node(node) else { continue };
-            let resonance = score * ctx.match_score(n) * compute_tension(n, now, 1.0);
+            let resonance = score * ctx.match_score(n) * compute_tension(n, now, 1.0).max(tension_floor);
             best.insert(node, resonance);
             if best.len() >= budget {
                 break; // 全局激活预算：截断扩散
@@ -524,6 +541,13 @@ impl MemoryGraph {
         }
         let mut out: Vec<(u32, f32)> = best.into_iter().collect();
         out.sort_by(|a, b| b.1.total_cmp(&a.1));
+        if seed_quota > 0 {
+            let seed_set: HashSet<u32> = seeds.iter().map(|&(s, _)| s).collect();
+            let hoisted: Vec<(u32, f32)> = out.iter().copied().filter(|(id, _)| seed_set.contains(id)).take(seed_quota).collect();
+            let hoisted_ids: HashSet<u32> = hoisted.iter().map(|&(id, _)| id).collect();
+            let rest = out.into_iter().filter(|(id, _)| !hoisted_ids.contains(id));
+            out = hoisted.into_iter().chain(rest).collect();
+        }
         out
     }
 }

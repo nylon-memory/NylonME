@@ -420,9 +420,11 @@ impl MemoryEngine for EngineService {
         let ctx = to_context(r.context);
         let query = r.query.to_lowercase();
         // 向量种子（锁外计算）
+        let mut qvec: Option<Vec<f32>> = None;
         let vec_seeds: Vec<(u32, f32)> = if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
             match emb.embed(std::slice::from_ref(&r.query)).await {
                 Ok(v) => {
+                    qvec = v.first().cloned();
                     let inner = self.inner.lock().map_err(|_| Status::internal("state lock poisoned"))?;
                     inner.index.search(&v[0], max_seeds())
                 }
@@ -522,7 +524,25 @@ impl MemoryEngine for EngineService {
         seeds.truncate(max_seeds());
 
         let budget = if r.budget == 0 { nylon_graph::DEFAULT_BUDGET } else { r.budget as usize };
-        let activated = g.resonate(&seeds, &ctx, now_secs(), budget);
+        let tension_floor = std::env::var("NYLON_TENSION_FLOOR").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let seed_quota = std::env::var("NYLON_SEED_QUOTA").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+        let rerank_alpha = std::env::var("NYLON_RERANK_VEC").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+        let mut activated = g.resonate_opts(&seeds, &ctx, now_secs(), budget, tension_floor, seed_quota);
+        // 向量重排：用查询向量对激活集做直接余弦相似度混合打分，校正共振排序
+        if rerank_alpha > 0.0 {
+            if let Some(q) = &qvec {
+                let qn = q.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+                for (id, s) in activated.iter_mut() {
+                    let sim = g.get_node(*id).filter(|n| n.embedding.len() == q.len()).map(|n| {
+                        let dot: f32 = q.iter().zip(n.embedding.iter()).map(|(a, b)| a * b).sum();
+                        let nn = n.embedding.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+                        dot / (qn * nn)
+                    }).unwrap_or(0.0);
+                    *s = (1.0 - rerank_alpha) * *s + rerank_alpha * sim;
+                }
+                activated.sort_by(|a, b| b.1.total_cmp(&a.1));
+            }
+        }
         let out = activated
             .into_iter()
             .filter_map(|(id, score)| g.get_node(id).map(|n| to_activated(id, score, n)))
