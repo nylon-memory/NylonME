@@ -80,6 +80,15 @@ fn max_seeds() -> usize {
         .and_then(|v| v.parse().ok())
         .unwrap_or(20)
 }
+
+/// 空闲反思窗口：距离最后一次 session 写入多久后开始补常识桥接。
+fn reflect_idle_duration() -> std::time::Duration {
+    let secs = std::env::var("NYLON_REFLECT_IDLE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(600);
+    std::time::Duration::from_secs(secs.max(1))
+}
 /// 向量种子保底名额：语义通道的召回兜底，防止被词面种子挤占。
 const VEC_SEED_QUOTA: usize = 8;
 /// Weave 自动建边上限。
@@ -88,6 +97,10 @@ const MAX_AUTO_LINKS: usize = 3;
 const AUTO_LINK_WEIGHT: f32 = 0.5;
 /// 层间显式边权重（抽象层事实 <-> 来源叶子），高于自动建边。
 const DERIVED_EDGE_WEIGHT: f32 = 1.0;
+/// 常识桥接节点标签：作为扩散中间层，不进入最终激活结果。
+const WORLD_KNOWLEDGE_TAG: &str = "__world_knowledge__";
+/// 常识桥接节点与抽象事实节点之间的边权重。
+const WORLD_BRIDGE_EDGE_WEIGHT: f32 = 0.8;
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -131,9 +144,18 @@ struct Inner {
     index: HnswIndex,
 }
 
+struct ReflectionJob {
+    tenant_id: String,
+    owner_id: String,
+    session_text: String,
+    fact_ids: Vec<u32>,
+}
+
 /// MemoryEngine 服务句柄（内部状态互斥保护，Phase 1 单写者够用）。
 pub struct EngineService {
-    inner: Mutex<Inner>,
+    inner: Arc<Mutex<Inner>>,
+    /// 空闲反思队列：异步补常识桥接节点。
+    reflect_tx: Option<tokio::sync::mpsc::UnboundedSender<ReflectionJob>>,
     /// 嵌入通道：None 时退回 Phase 1 行为（无向量写入、无向量种子）。
     embedder: Option<Arc<dyn Embedder>>,
     /// LLM ch: None shi guan bi bian zhi fen jie yu chong tu jian ce.
@@ -147,13 +169,54 @@ impl EngineService {
         embedder: Option<Arc<dyn Embedder>>,
         llm: Option<Arc<dyn ChatModel>>,
     ) -> Self {
+        let inner = Arc::new(Mutex::new(Inner {
+            store,
+            index: HnswIndex::new(embed_dims),
+        }));
+        let reflect_tx = llm.clone().map(|llm| {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ReflectionJob>();
+            let inner = Arc::clone(&inner);
+            let embedder = embedder.clone();
+            tokio::spawn(async move {
+                let mut pending: Vec<ReflectionJob> = Vec::new();
+                loop {
+                    match tokio::time::timeout(reflect_idle_duration(), rx.recv()).await {
+                        Ok(Some(job)) => pending.push(job),
+                        Ok(None) => {
+                            if !pending.is_empty() {
+                                let jobs = std::mem::take(&mut pending);
+                                process_reflection_jobs(
+                                    &inner,
+                                    embedder.as_ref(),
+                                    llm.as_ref(),
+                                    jobs,
+                                )
+                                .await;
+                            }
+                            break;
+                        }
+                        Err(_) => {
+                            if !pending.is_empty() {
+                                let jobs = std::mem::take(&mut pending);
+                                process_reflection_jobs(
+                                    &inner,
+                                    embedder.as_ref(),
+                                    llm.as_ref(),
+                                    jobs,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            });
+            tx
+        });
         EngineService {
-            inner: Mutex::new(Inner {
-                store,
-                index: HnswIndex::new(embed_dims),
-            }),
+            inner,
             embedder,
             llm,
+            reflect_tx,
         }
     }
 }
@@ -492,6 +555,124 @@ async fn extract_session_facts(
     }
 }
 
+/// 从 session 抽取一般世界/常识事实，作为桥接节点使用。失败返回空。
+async fn extract_commonsense_bridges(llm: &dyn ChatModel, session_text: &str) -> Vec<String> {
+    let system = "You are a commonsense memory linker. Given a dialogue session with turn IDs, extract 1-3 general world or common-sense facts implied by the events that would help connect or infer them. Do not include personal identities or private details. Each fact must be self-contained and neutral. Output ONLY valid JSON: {\"bridges\": [\"...\", ...]}.";
+    match llm.chat_json(system, session_text).await {
+        Ok(v) => v
+            .get("bridges")
+            .and_then(|b| b.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        Err(e) => {
+            eprintln!("[weave_session] LLM commonsense bridge 分解失败，跳过: {e}");
+            Vec::new()
+        }
+    }
+}
+
+async fn process_reflection_jobs(
+    inner: &Arc<Mutex<Inner>>,
+    embedder: Option<&Arc<dyn Embedder>>,
+    llm: &dyn ChatModel,
+    jobs: Vec<ReflectionJob>,
+) {
+    for job in jobs {
+        if job.fact_ids.is_empty() {
+            continue;
+        }
+        let bridges = extract_commonsense_bridges(llm, &job.session_text).await;
+        if bridges.is_empty() {
+            continue;
+        }
+        let mut wrote = 0usize;
+        for bridge in bridges {
+            match write_world_bridge(inner, embedder, &job.owner_id, &job.fact_ids, bridge).await {
+                Ok(()) => wrote += 1,
+                Err(e) => eprintln!("[reflect] 常识桥接写入失败: {e}"),
+            }
+        }
+        if wrote > 0 {
+            eprintln!(
+                "[reflect] tenant={} owner={} 补常识桥接 {} 个",
+                job.tenant_id, job.owner_id, wrote
+            );
+        }
+    }
+}
+
+async fn write_world_bridge(
+    inner: &Arc<Mutex<Inner>>,
+    embedder: Option<&Arc<dyn Embedder>>,
+    owner_id: &str,
+    fact_ids: &[u32],
+    bridge: String,
+) -> Result<(), Status> {
+    let embedding = if let Some(emb) = embedder {
+        emb.embed(std::slice::from_ref(&bridge))
+            .await
+            .map_err(|e| Status::internal(format!("嵌入失败: {e}")))?
+            .pop()
+    } else {
+        None
+    };
+    let now = now_secs();
+    let node = MemoryNode {
+        id: 0,
+        owner_id: owner_id.to_string(),
+        filaments: Filaments {
+            fact: bridge,
+            emotion_valence: 0.0,
+            emotion_intensity: 0.0,
+            created_at: now,
+            decay_rate: 0.01,
+            relations: vec![WORLD_KNOWLEDGE_TAG.to_string()],
+            confidence: 0.6,
+            mentions_7d: 0,
+        },
+        tension: Tension {
+            baseline: 0.6,
+            last_updated: now,
+        },
+        embedding: embedding.unwrap_or_default(),
+    };
+    let index_embedding = node.embedding.clone();
+    let ticket = {
+        let mut inner = inner
+            .lock()
+            .map_err(|_| Status::internal("state lock poisoned"))?;
+        let (local, node_ticket) = inner
+            .store
+            .add_node(node)
+            .map_err(|e| Status::internal(format!("wal append: {e}")))?;
+        if !index_embedding.is_empty() {
+            inner.index.add(local, &index_embedding);
+        }
+        let mut t = Some(node_ticket);
+        for fid in fact_ids {
+            t = Some(
+                inner
+                    .store
+                    .add_edge(local, *fid, WORLD_BRIDGE_EDGE_WEIGHT)
+                    .map_err(|e| Status::internal(format!("wal append: {e}")))?,
+            );
+        }
+        t
+    };
+    if let Some(t) = ticket {
+        tokio::task::spawn_blocking(move || t.wait())
+            .await
+            .map_err(|e| Status::internal(format!("durability join: {e}")))?
+            .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
+    }
+    Ok(())
+}
+
 #[tonic::async_trait]
 impl MemoryEngine for EngineService {
     async fn weave(&self, req: Request<WeaveRequest>) -> Result<Response<WeaveResponse>, Status> {
@@ -569,6 +750,62 @@ impl MemoryEngine for EngineService {
                         fact,
                         source_event_ids: sources,
                     });
+                }
+                if std::env::var("NYLON_WORLD_BRIDGES_ASYNC").is_err()
+                    && std::env::var("NYLON_WORLD_BRIDGES").is_ok()
+                    && !fact_nodes.is_empty()
+                {
+                    let bridges =
+                        extract_commonsense_bridges(llm.as_ref(), &lines.join("\n")).await;
+                    let fact_ids: Vec<u32> = fact_nodes.iter().map(|f| f.node_id as u32).collect();
+                    for bridge in bridges {
+                        let ctx = Some(pb::ContextSpectrum {
+                            task: Some(WORLD_KNOWLEDGE_TAG.to_string()),
+                            emotion_valence: None,
+                            device: None,
+                            max_hops: None,
+                        });
+                        let (world_local, _, _) = self
+                            .weave_one(&r.tenant_id, &r.owner_id, &bridge, ctx, WeaveLlmMode::Off)
+                            .await?;
+                        let ticket = {
+                            let mut inner = self
+                                .inner
+                                .lock()
+                                .map_err(|_| Status::internal("state lock poisoned"))?;
+                            let mut t = None;
+                            for fid in &fact_ids {
+                                t = Some(
+                                    inner
+                                        .store
+                                        .add_edge(world_local, *fid, WORLD_BRIDGE_EDGE_WEIGHT)
+                                        .map_err(|e| {
+                                            Status::internal(format!("wal append: {e}"))
+                                        })?,
+                                );
+                            }
+                            t
+                        };
+                        if let Some(t) = ticket {
+                            tokio::task::spawn_blocking(move || t.wait())
+                                .await
+                                .map_err(|e| Status::internal(format!("durability join: {e}")))?
+                                .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
+                        }
+                    }
+                }
+                if std::env::var("NYLON_WORLD_BRIDGES_ASYNC").is_ok() && !fact_nodes.is_empty() {
+                    if let Some(tx) = &self.reflect_tx {
+                        let job = ReflectionJob {
+                            tenant_id: r.tenant_id.clone(),
+                            owner_id: r.owner_id.clone(),
+                            session_text: lines.join("\n"),
+                            fact_ids: fact_nodes.iter().map(|f| f.node_id as u32).collect(),
+                        };
+                        if tx.send(job).is_err() {
+                            eprintln!("[weave_session] reflection worker 已关闭，跳过异步常识桥接");
+                        }
+                    }
                 }
             }
         }
@@ -793,7 +1030,17 @@ impl MemoryEngine for EngineService {
         }
         let out = activated
             .into_iter()
-            .filter_map(|(id, score)| g.get_node(id).map(|n| to_activated(id, score, n)))
+            .filter_map(|(id, score)| {
+                let n = g.get_node(id)?;
+                if n.filaments
+                    .relations
+                    .iter()
+                    .any(|r| r == WORLD_KNOWLEDGE_TAG)
+                {
+                    return None;
+                }
+                Some(to_activated(id, score, n))
+            })
             .collect();
         Ok(Response::new(ResonateResponse {
             activated: out,

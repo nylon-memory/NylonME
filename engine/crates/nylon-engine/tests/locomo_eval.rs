@@ -94,6 +94,10 @@ async fn locomo_evidence_recall() {
     let llm = llm_from_env();
     let llm_on = llm.is_some();
     let query_expand = std::env::var("NYLON_QUERY_EXPAND").is_ok() && llm_on;
+    // 按类别查询扩展（仅评测）：NYLON_CAT{n}_EXPAND=1 时仅对该类别启用 LLM 扩展
+    let cat_expand = |cat: i64| -> bool {
+        query_expand || (std::env::var(format!("NYLON_CAT{cat}_EXPAND")).is_ok() && llm_on)
+    };
     if embedder_on {
         println!("[eval] 嵌入通道已启用 (NYLON_EMBED_URL), dims={dims}");
         if llm_on {
@@ -217,6 +221,15 @@ async fn locomo_evidence_recall() {
             .await;
         }
 
+        if session_weave && std::env::var("NYLON_WORLD_BRIDGES_ASYNC").is_ok() {
+            let wait_secs = std::env::var("NYLON_REFLECT_WAIT_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(45);
+            println!("[eval] 等待异步反思 {wait_secs}s 后进入查询");
+            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+        }
+
         // 对每个可答 QA 跑共振检索
         for qa in conv["qa"].as_array().cloned().unwrap_or_default() {
             let cat = qa["category"].as_i64().unwrap_or(0);
@@ -234,13 +247,22 @@ async fn locomo_evidence_recall() {
                 continue;
             }
             let question = qa["question"].as_str().unwrap_or("");
-            let expanded = if query_expand {
-                expand_query(expander.as_deref(), question)
+            let expanded = if cat_expand(cat) {
+                expand_query(expander.as_deref(), question, cat)
                     .await
                     .unwrap_or_else(|| question.to_string())
             } else {
                 question.to_string()
             };
+            // 按类别实验旋钮（仅评测）：NYLON_CAT{n}_SEEDS / NYLON_CAT{n}_RERANK 临时覆盖全局值
+            let saved_seeds = std::env::var("NYLON_MAX_SEEDS").ok();
+            let saved_rerank = std::env::var("NYLON_RERANK_VEC").ok();
+            if let Ok(v) = std::env::var(format!("NYLON_CAT{cat}_SEEDS")) {
+                std::env::set_var("NYLON_MAX_SEEDS", &v);
+            }
+            if let Ok(v) = std::env::var(format!("NYLON_CAT{cat}_RERANK")) {
+                std::env::set_var("NYLON_RERANK_VEC", &v);
+            }
             let resp = client
                 .resonate(ResonateRequest {
                     tenant_id: "locomo".into(),
@@ -260,6 +282,14 @@ async fn locomo_evidence_recall() {
                 .await
                 .unwrap()
                 .into_inner();
+            match &saved_seeds {
+                Some(v) => std::env::set_var("NYLON_MAX_SEEDS", v),
+                None => std::env::remove_var("NYLON_MAX_SEEDS"),
+            }
+            match &saved_rerank {
+                Some(v) => std::env::set_var("NYLON_RERANK_VEC", v),
+                None => std::env::remove_var("NYLON_RERANK_VEC"),
+            }
             let got: Vec<u64> = resp
                 .activated
                 .iter()
@@ -338,10 +368,27 @@ async fn locomo_evidence_recall() {
     }
 }
 
-/// LLM 查询扩展：把问题改写成 3-6 个实体关键词，附加在原问题后，提升词面/向量种子命中
-async fn expand_query(llm: Option<&dyn nylon_llm::ChatModel>, question: &str) -> Option<String> {
+/// LLM 查询扩展：普通类目扩关键词；Cat3 可选 HyDE 生成假设证据句。
+async fn expand_query(
+    llm: Option<&dyn nylon_llm::ChatModel>,
+    question: &str,
+    cat: i64,
+) -> Option<String> {
     let llm = llm?;
-    let system = "You are a search query expander for a conversation memory system. Given a question about past conversations, output ONLY valid JSON: {\"keywords\": [3-6 key entities, names, places, dates, or topics that likely appear verbatim in the original conversation]. Use the original language of the question. No explanations.";
+    if cat == 3 && std::env::var("NYLON_CAT3_HYDE").is_ok() {
+        let system = "You are a hypothesis document expander for a conversation memory system. Given a question that may require inference over past conversations, write one concise hypothetical evidence passage (1-2 sentences, at most 80 words) that would directly answer or justify the question. Do not use hedging words; include concrete entities, numbers, or dates only when clearly implied. Output ONLY valid JSON: {\"passage\": \"your passage here\"}. Use the original language of the question. No explanations.";
+        let v = llm.chat_json(system, question).await.ok()?;
+        let passage = v.get("passage").and_then(|p| p.as_str()).map(str::trim)?;
+        if passage.is_empty() {
+            return None;
+        }
+        return Some(format!("{question} {passage}"));
+    }
+    let system = if cat == 3 && std::env::var("NYLON_CAT3_EXPAND_V2").is_ok() {
+        "You are a commonsense query expander for a conversation memory system. Given a question that may require inference over past conversations, output ONLY valid JSON: {\"keywords\": [4-8 search terms]. Include explicit entities, the likely answer type, abstract concepts, related event descriptions, and synonyms/paraphrases that may appear in the original conversation. Use the original language of the question. No explanations."
+    } else {
+        "You are a search query expander for a conversation memory system. Given a question about past conversations, output ONLY valid JSON: {\"keywords\": [3-6 key entities, names, places, dates, or topics that likely appear verbatim in the original conversation]. Use the original language of the question. No explanations."
+    };
     let v = llm.chat_json(system, question).await.ok()?;
     let kws: Vec<String> = v
         .get("keywords")?
