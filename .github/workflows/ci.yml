@@ -27,3 +27,19 @@ jobs:
       - name: test
         run: cargo test --workspace
         working-directory: engine
+  sdk-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SDK
+        run: pip install ./sdk/python
+      - name: Import smoke test
+        run: python -c "from nylon_sdk import NylonClient, AsyncNylonClient, __version__; print('import ok', __version__)"
+      - name: Stubs match the proto
+        run: |
+          pip install grpcio-tools
+          python sdk/python/tools/codegen.py
+          git diff --exit-code -- sdk/python/src/nylon_sdk/_gen

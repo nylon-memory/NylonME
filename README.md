@@ -18,8 +18,9 @@ LoCoMo evidence recall@10, full 10-session corpus (1536 answerable QA, lexical +
 | + dual-layer write (leaf turns + session-level LLM facts) | 79.2% |
 | + adaptive resonance depth (Cat4 single-hop queries skip diffusion) | 80.1% |
 | + query-vector rerank of the activated set | **84.6%** |
+| + async commonsense reflection (world-knowledge bridges) | **85.3%** |
 
-Per-category (full corpus): multi-hop 83.0%, temporal 86.0%, commonsense 53.3%, single-hop 88.0%.
+Per-category (full corpus): multi-hop 84.8%, temporal 86.6%, commonsense 60.9%, single-hop 87.6%.
 
 Two design rules the experiments forced on us: the **understanding layer lives on the write side** (the LLM is a compiler that turns raw events into retrievable structure; query-side LLM expansion measured net-zero), and **both layers must coexist** (abstract-layer-only retrieval drops the score to 67.3%).
 
@@ -41,6 +42,24 @@ Two design rules the experiments forced on us: the **understanding layer lives o
 ```
 
 Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your agent gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node). See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for per-client setup.
+## Python SDK
+
+`nylon-sdk` wraps the gRPC contract in sync + async clients:
+
+```bash
+pip install ./sdk/python    # from this repo
+```
+
+```python
+from nylon_sdk import NylonClient
+
+with NylonClient("127.0.0.1:50051", owner="alice") as client:
+    client.weave("Alice prefers window seats on business trips")
+    for node in client.resonate("flight seat preference").activated:
+        print(node.filaments.fact)
+```
+
+See [sdk/python/README.md](sdk/python/README.md).
 ## Quick Start
 
 ```bash

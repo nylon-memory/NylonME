@@ -18,8 +18,9 @@ LoCoMo 证据召回 recall@10，全量 10 会话语料（1536 个可答 QA，词
 | +双层写入（叶子层原文 + session 级 LLM 事实） | 79.2% |
 | +自适应联想深度（Cat4 单跳查询不扩散） | 80.1% |
 | +查询向量重排激活集 | **84.6%** |
+| +异步常识反思（世界知识桥接） | **85.3%** |
 
-分类表现（全量）：多跳 83.0%、时序 86.0%、常识 53.3%、单跳 88.0%。
+分类表现（全量）：多跳 84.8%、时序 86.6%、常识 60.9%、单跳 87.6%。
 
 实验逼出来的两条设计铁律：**理解层在写入侧**（LLM 是记忆的编译器，把原始事件编译成可检索结构；查询侧 LLM 扩展实测净零），以及**两层必须共存**（只用抽象层检索会把分数拉到 67.3%）。
 
@@ -41,6 +42,24 @@ LoCoMo 证据召回 recall@10，全量 10 会话语料（1536 个可答 QA，词
 ```
 
 Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。Agent 会获得三个工具：`memory_weave`（沉淀事实）、`memory_resonate`（回忆相关记忆）、`memory_get`（按 ID 读取）。各客户端的详细配置见 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
+## Python SDK
+
+`nylon-sdk` 把 gRPC 契约封装成同步 + 异步客户端：
+
+```bash
+pip install ./sdk/python    # 从本仓库安装
+```
+
+```python
+from nylon_sdk import NylonClient
+
+with NylonClient("127.0.0.1:50051", owner="alice") as client:
+    client.weave("Alice prefers window seats on business trips")
+    for node in client.resonate("flight seat preference").activated:
+        print(node.filaments.fact)
+```
+
+详见 [sdk/python/README.md](sdk/python/README.md)。
 ## 快速开始
 
 ```bash

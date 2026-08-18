@@ -92,6 +92,27 @@ Any tool that can run a shell command or speak gRPC can use NylonME:
 
 Good facts are self-contained sentences with names, numbers, and paths. Never weave secrets (API keys, passwords).
 
+## Python SDK
+
+`nylon-sdk` wraps the gRPC contract in sync + async clients:
+
+```bash
+pip install ./sdk/python    # from this repo
+```
+
+```python
+from nylon_sdk import NylonClient
+
+with NylonClient("127.0.0.1:50051", owner="alice") as client:
+    client.weave("Alice prefers window seats on business trips")
+    for node in client.resonate("flight seat preference", budget=5).activated:
+        print(node.filaments.fact)
+```
+
+Batch session ingestion uses `client.weave_session([...])`; bring your own
+embeddings with `client.search(embedding, top_k=10)`. Full API surface:
+[sdk/python/README.md](../sdk/python/README.md).
+
 ## Tuning
 
 See the [README](../README.md#tuning-knobs-env-vars) for the full env-var knob table (`NYLON_MAX_SEEDS`, `NYLON_CAT{n}_MAX_HOPS`, `NYLON_RERANK_VEC`, ...).
