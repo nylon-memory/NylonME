@@ -5,7 +5,7 @@ Official Python client for the [NylonME](https://github.com/nylon-memory/NylonME
 ## Install
 
 ```bash
-pip install nylon-sdk            # once published to PyPI
+pip install nylon-sdk            # from PyPI
 pip install ./sdk/python         # from this repo
 ```
 
