@@ -47,9 +47,9 @@ Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。A
 
 引擎二进制自带零安装 Web 控制台和 REST API（默认 `http://127.0.0.1:50052`，`NYLON_HTTP_ADDR=off` 关闭）：
 
-![NylonME Console](docs/ui-console.png)
+![NylonME Console](docs/ui-console-zh.png)
 
-浏览记忆（实时张力）、调试共振查询（种子、分数、自适应深度）、手工写入记忆——与 gRPC/MCP 同一个引擎、同一条写路径。REST 端点与 gRPC 契约一一对应，规范见 [docs/api/openapi.json](docs/api/openapi.json)。
+浏览记忆（实时张力）、调试共振查询（种子、分数、自适应深度）、手工写入记忆——与 gRPC/MCP 同一个引擎、同一条写路径。REST 端点与 gRPC 契约一一对应，规范见 [docs/api/openapi.json](docs/api/openapi.json)。内置深色/浅色主题和中英文界面切换。
 
 ## Python SDK
 

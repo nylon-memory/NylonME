@@ -9,6 +9,7 @@
   --accent-dim: #134e4a;
   --amber: #f5a524;
   --danger: #f87171;
+  --shadow: -12px 0 32px rgba(0,0,0,.5);
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -123,7 +124,7 @@ main { flex: 1; overflow: auto; padding: 16px; }
 .drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: 420px;
   background: var(--panel); border-left: 1px solid var(--border);
-  box-shadow: -12px 0 32px rgba(0,0,0,.5); z-index: 20;
+  box-shadow: var(--shadow); z-index: 20;
   display: flex; flex-direction: column;
 }
 .drawer-head {
@@ -147,3 +148,28 @@ main { flex: 1; overflow: auto; padding: 16px; }
   .drawer { width: 100%; }
   .stats { display: none; }
 }
+/* light theme */
+:root[data-theme="light"] {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --panel-2: #e9ebef;
+  --border: #d5d9e0;
+  --text: #1d2430;
+  --muted: #5d6878;
+  --accent: #0c9488;
+  --accent-dim: #bfe8e3;
+  --amber: #c77c0a;
+  --danger: #d33030;
+  --shadow: -12px 0 32px rgba(15,23,42,.16);
+}
+:root[data-theme="light"] input:focus,
+:root[data-theme="light"] textarea:focus,
+:root[data-theme="light"] select:focus { border-color: var(--accent); }
+:root[data-theme="light"] .brand svg { stroke: var(--accent); }
+
+/* theme toggle icon swap */
+#theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; }
+#theme-toggle .ic-sun { display: none; }
+:root[data-theme="light"] #theme-toggle .ic-sun { display: block; }
+:root[data-theme="light"] #theme-toggle .ic-moon { display: none; }
+#lang-toggle { width: 36px; font-size: 12px; font-weight: 600; }

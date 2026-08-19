@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NylonME Console</title>
+<script>
+try {
+  var q = new URLSearchParams(location.search);
+  var th = q.get("theme") || localStorage.getItem("nylon.theme");
+  if (th === "light") document.documentElement.dataset.theme = "light";
+} catch (e) {}
+</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -13,54 +20,63 @@
     <span>NylonME <em>Console</em></span>
   </div>
   <div class="stats" id="stats">
-    <span class="chip" title="memory nodes"><b id="stat-nodes">–</b> nodes</span>
-    <span class="chip" title="graph edges"><b id="stat-edges">–</b> edges</span>
-    <span class="chip" id="stat-embed" title="embedding channel">embed –</span>
-    <span class="chip" id="stat-llm" title="LLM weave channel">llm –</span>
+    <span class="chip" data-i18n-title="tip.nodes" title="memory nodes"><b id="stat-nodes">–</b> <span data-i18n="stats.nodes">nodes</span></span>
+    <span class="chip" data-i18n-title="tip.edges" title="graph edges"><b id="stat-edges">–</b> <span data-i18n="stats.edges">edges</span></span>
+    <span class="chip" id="stat-embed" data-i18n-title="tip.embed" title="embedding channel">embed –</span>
+    <span class="chip" id="stat-llm" data-i18n-title="tip.llm" title="LLM weave channel">llm –</span>
   </div>
   <div class="owner-box">
     <label for="owner">owner</label>
     <input id="owner" type="text" value="default" spellcheck="false">
   </div>
+  <button id="theme-toggle" class="btn icon" data-i18n-title="tip.theme" title="toggle light / dark theme">
+    <svg class="ic-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    <svg class="ic-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  </button>
+  <button id="lang-toggle" class="btn icon" data-i18n-title="tip.lang" title="switch language">EN</button>
 </header>
 
 <nav class="tabs">
-  <button class="tab active" data-view="memories" id="tab-memories">Memories</button>
-  <button class="tab" data-view="resonate" id="tab-resonate">Resonate</button>
-  <button class="tab" data-view="weave" id="tab-weave">Weave</button>
+  <button class="tab active" data-view="memories" id="tab-memories" data-i18n="tab.memories">Memories</button>
+  <button class="tab" data-view="resonate" id="tab-resonate" data-i18n="tab.resonate">Resonate</button>
+  <button class="tab" data-view="weave" id="tab-weave" data-i18n="tab.weave">Weave</button>
 </nav>
 
 <main>
   <section id="view-memories" class="view active">
     <div class="toolbar">
-      <input id="mem-filter" type="search" placeholder="filter facts…" spellcheck="false">
-      <button id="mem-refresh" class="btn" title="reload">Refresh</button>
+      <input id="mem-filter" type="search" data-i18n-ph="ph.filter" placeholder="filter facts…" spellcheck="false">
+      <select id="mem-scope">
+        <option value="all" data-i18n="scope.all">all owners</option>
+        <option value="mine" data-i18n="scope.mine">current owner</option>
+      </select>
+      <button id="mem-refresh" class="btn" data-i18n-title="tip.reload" title="reload" data-i18n="btn.refresh">Refresh</button>
       <span class="muted" id="mem-total"></span>
       <div class="pager">
-        <button id="mem-prev" class="btn icon" title="previous page">‹</button>
+        <button id="mem-prev" class="btn icon" data-i18n-title="tip.prev" title="previous page">‹</button>
         <span id="mem-page" class="muted">1</span>
-        <button id="mem-next" class="btn icon" title="next page">›</button>
+        <button id="mem-next" class="btn icon" data-i18n-title="tip.next" title="next page">›</button>
       </div>
     </div>
     <table class="grid">
-      <thead><tr><th class="num">ID</th><th>Fact</th><th class="tension-col">Tension</th><th>Relations</th><th class="num">Mentions</th><th>Created</th></tr></thead>
+      <thead><tr><th class="num">ID</th><th data-i18n="th.fact">Fact</th><th class="tension-col" data-i18n="th.tension">Tension</th><th data-i18n="th.relations">Relations</th><th class="num" data-i18n="th.mentions">Mentions</th><th data-i18n="th.created">Created</th></tr></thead>
       <tbody id="mem-rows"></tbody>
     </table>
-    <div class="empty muted" id="mem-empty" hidden>no memories yet for this owner</div>
+    <div class="empty muted" id="mem-empty" hidden data-i18n="mem.empty">no memories found</div>
   </section>
 
   <section id="view-resonate" class="view">
     <div class="form-row">
-      <input id="res-query" type="text" placeholder="query — e.g. flight seat preference" spellcheck="false">
-      <input id="res-budget" type="number" value="10" min="1" max="500" title="activation budget (top-k)">
-      <select id="res-hops" title="max graph hops: default = adaptive; 0 = precise recall (no spread)">
-        <option value="">hops: auto</option>
-        <option value="0">hops: 0 (precise)</option>
-        <option value="1">hops: 1</option>
-        <option value="2">hops: 2</option>
-        <option value="3">hops: 3</option>
+      <input id="res-query" type="text" data-i18n-ph="ph.query" placeholder="query — e.g. flight seat preference" spellcheck="false">
+      <input id="res-budget" type="number" value="10" min="1" max="500" data-i18n-title="tip.budget" title="activation budget (top-k)">
+      <select id="res-hops" data-i18n-title="tip.hops" title="max graph hops: default = adaptive; 0 = precise recall (no spread)">
+        <option value="" data-i18n="hops.auto">hops: auto</option>
+        <option value="0" data-i18n="hops.precise">hops: 0 (precise)</option>
+        <option value="1" data-i18n-n="1">hops: 1</option>
+        <option value="2" data-i18n-n="2">hops: 2</option>
+        <option value="3" data-i18n-n="3">hops: 3</option>
       </select>
-      <button id="res-run" class="btn primary">Resonate</button>
+      <button id="res-run" class="btn primary" data-i18n="btn.resonate">Resonate</button>
     </div>
     <div class="muted" id="res-meta"></div>
     <div id="res-results" class="cards"></div>
@@ -69,20 +85,20 @@
   <section id="view-weave" class="view">
     <div class="weave-cols">
       <div class="panel">
-        <h3>Single memory</h3>
-        <textarea id="wv-text" rows="3" placeholder="a self-contained fact, e.g. Alice prefers window seats on business trips" spellcheck="false"></textarea>
+        <h3 data-i18n="weave.single">Single memory</h3>
+        <textarea id="wv-text" rows="3" data-i18n-ph="ph.fact" placeholder="a self-contained fact, e.g. Alice prefers window seats on business trips" spellcheck="false"></textarea>
         <div class="form-row">
-          <input id="wv-task" type="text" placeholder="task tag (optional)" spellcheck="false">
-          <button id="wv-run" class="btn primary">Weave</button>
+          <input id="wv-task" type="text" data-i18n-ph="ph.task" placeholder="task tag (optional)" spellcheck="false">
+          <button id="wv-run" class="btn primary" data-i18n="btn.weave">Weave</button>
         </div>
         <div id="wv-result" class="result" hidden></div>
       </div>
       <div class="panel">
-        <h3>Session batch <span class="muted">(two-tier write)</span></h3>
+        <h3><span data-i18n="weave.session">Session batch</span> <span class="muted" data-i18n="weave.twotier">(two-tier write)</span></h3>
         <textarea id="ws-text" rows="5" placeholder='[{"speaker":"user","text":"…","event_id":"e1"}, …]' spellcheck="false"></textarea>
         <div class="form-row">
-          <label class="check"><input id="ws-skip" type="checkbox"> skip abstract layer</label>
-          <button id="ws-run" class="btn primary">Weave session</button>
+          <label class="check"><input id="ws-skip" type="checkbox"> <span data-i18n="ws.skip">skip abstract layer</span></label>
+          <button id="ws-run" class="btn primary" data-i18n="btn.weaveSession">Weave session</button>
         </div>
         <div id="ws-result" class="result" hidden></div>
       </div>
@@ -92,8 +108,8 @@
 
 <aside id="drawer" class="drawer" hidden>
   <div class="drawer-head">
-    <span>Node <b id="d-id" class="mono"></b></span>
-    <button id="d-close" class="btn icon" title="close">×</button>
+    <span><span data-i18n="drawer.node">Node</span> <b id="d-id" class="mono"></b></span>
+    <button id="d-close" class="btn icon" data-i18n-title="tip.close" title="close">×</button>
   </div>
   <div class="drawer-body" id="d-body"></div>
 </aside>
