@@ -71,6 +71,18 @@ with NylonClient("127.0.0.1:50051", owner="alice") as client:
 See [sdk/python/README.md](sdk/python/README.md).
 ## Quick Start
 
+### Run with Docker (one command, no Rust toolchain needed)
+
+```bash
+git clone https://github.com/nylon-memory/NylonME.git
+cd NylonME
+docker compose up -d
+```
+
+This starts the engine plus ollama (auto-pulls the `bge-m3` embedding model). Then open the web console at http://localhost:50052 — gRPC is on :50051, REST/OpenAPI under the same HTTP port. To skip the local build and pull a prebuilt image instead: `docker compose -f docker-compose.prebuilt.yml up -d`. Set `NYLON_LLM_API_KEY` before `up` to enable the LLM weaving layer (DeepSeek by default).
+
+### Build from source
+
 ```bash
 cd engine
 cargo test                    # run all unit tests

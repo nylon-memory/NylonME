@@ -2,7 +2,28 @@
 
 [English] | 这篇文档带你 5 分钟跑起 NylonME：下载预编译二进制或从源码构建，启动引擎，写入并召回第一条记忆。
 
-## Option A: Download a prebuilt release (fastest)
+## Option A: Docker Compose (one command)
+
+Prerequisites: Docker with the compose plugin. No Rust, no protoc.
+
+```bash
+git clone https://github.com/nylon-memory/NylonME.git
+cd NylonME
+docker compose up -d
+```
+
+This builds the engine image locally and starts three containers: `engine` (gRPC :50051 + web console/REST :50052), `ollama`, and a one-shot `ollama-pull` job that fetches the `bge-m3` embedding model. First start takes a few minutes (Rust release build + model download).
+
+To skip the local build entirely, use the published image:
+
+```bash
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+Optional: enable the LLM weaving/reflection layer by exporting `NYLON_LLM_API_KEY` before `up` (DeepSeek `deepseek-v4-flash` is preconfigured; override `NYLON_LLM_URL`/`NYLON_LLM_MODEL` for any OpenAI-compatible endpoint).
+
+Data persists in the `nylon-data` named volume. Open http://localhost:50052 for the web console.
+## Option B: Download a prebuilt release (no build tools)
 
 Grab the latest archive for your platform from [GitHub Releases](https://github.com/nylon-memory/NylonME/releases):
 
@@ -18,7 +39,7 @@ Each archive contains:
 - `nylon_cli` — a small CLI for weaving and resonating memories
 - `smoke_client` — a 4-RPC end-to-end smoke test
 
-## Option B: Build from source
+## Option C: Build from source
 
 Prerequisites: Rust (stable), `protoc`, and on Linux also `clang` + `libclang-dev` (needed by the RocksDB bindings).
 

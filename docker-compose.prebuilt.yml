@@ -1,0 +1,59 @@
+# NylonME 预构建镜像版 — 无需本地 Rust 工具链, 直接拉取 GHCR 镜像:
+#
+#   docker compose -f docker-compose.prebuilt.yml up -d
+#
+# 与 docker-compose.yml 的唯一区别: engine 服务使用发布镜像而非本地构建。
+
+services:
+  engine:
+    image: ghcr.io/nylon-memory/nylonme:latest
+    environment:
+      NYLON_DATA_DIR: /home/nylon/data
+      NYLON_HTTP_ADDR: 0.0.0.0:50052
+      NYLON_EMBED_URL: http://ollama:11434/v1/embeddings
+      NYLON_EMBED_MODEL: bge-m3
+      NYLON_EMBED_DIMS: "1024"
+      NYLON_LLM_URL: https://api.deepseek.com/chat/completions
+      NYLON_LLM_MODEL: deepseek-v4-flash
+      NYLON_LLM_THINKING_OFF: "1"
+      NYLON_LLM_API_KEY: ${NYLON_LLM_API_KEY:-}
+    volumes:
+      - nylon-data:/home/nylon/data
+    ports:
+      - "50051:50051"
+      - "50052:50052"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "show", "bge-m3"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+    restart: unless-stopped
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          OLLAMA_HOST=http://ollama:11434 ollama pull bge-m3 && exit 0
+          sleep 5
+        done
+        exit 1
+    restart: "no"
+
+volumes:
+  nylon-data:
+  ollama-models:

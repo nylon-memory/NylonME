@@ -1,0 +1,72 @@
+# NylonME 社区版一键部署: engine + ollama(嵌入模型 bge-m3)
+#
+#   docker compose up -d
+#
+# 启动后:
+#   Web 控制台 / REST   http://localhost:50052
+#   gRPC                localhost:50051
+#   OpenAPI             http://localhost:50052/openapi.json
+#
+# 可选: 启用 DeepSeek 编织/反思, 在 up 前设置环境变量:
+#   $env:NYLON_LLM_API_KEY="sk-..."        (Windows PowerShell)
+#   export NYLON_LLM_API_KEY=sk-...        (Linux/macOS)
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: engine/Dockerfile
+    image: nylonme:latest
+    environment:
+      NYLON_DATA_DIR: /home/nylon/data
+      NYLON_HTTP_ADDR: 0.0.0.0:50052
+      NYLON_EMBED_URL: http://ollama:11434/v1/embeddings
+      NYLON_EMBED_MODEL: bge-m3
+      NYLON_EMBED_DIMS: "1024"
+      # 留空则不启用 LLM 通道 (引擎仍可运行, 只是不做编织分解/反思)
+      NYLON_LLM_URL: https://api.deepseek.com/chat/completions
+      NYLON_LLM_MODEL: deepseek-v4-flash
+      NYLON_LLM_THINKING_OFF: "1"
+      NYLON_LLM_API_KEY: ${NYLON_LLM_API_KEY:-}
+    volumes:
+      - nylon-data:/home/nylon/data
+    ports:
+      - "50051:50051"
+      - "50052:50052"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # bge-m3 拉取完成后才算就绪, 引擎再启动
+      test: ["CMD", "ollama", "show", "bge-m3"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+    restart: unless-stopped
+
+  # 一次性任务: 给 ollama 拉取嵌入模型
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          OLLAMA_HOST=http://ollama:11434 ollama pull bge-m3 && exit 0
+          sleep 5
+        done
+        exit 1
+    restart: "no"
+
+volumes:
+  nylon-data:
+  ollama-models:

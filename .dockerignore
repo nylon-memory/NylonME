@@ -1,0 +1,8 @@
+.git
+**/target
+**/dist
+**/__pycache__
+**/*.egg-info
+docs/*.png
+sdk/python/build
+.env
