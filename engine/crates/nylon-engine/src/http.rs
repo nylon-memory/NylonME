@@ -160,12 +160,14 @@ fn ctx(
 
 // UI 资源随二进制升级而变，禁缓存避免升级后浏览器拿到旧页面。
 async fn ui_index() -> impl IntoResponse {
+    // 资源引用带版本号，升级后自动击穿浏览器磁盘缓存中的旧 app.js/style.css
+    let html = INDEX_HTML.replace("__NYLON_VER__", env!("CARGO_PKG_VERSION"));
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        INDEX_HTML,
+        html,
     )
 }
 
