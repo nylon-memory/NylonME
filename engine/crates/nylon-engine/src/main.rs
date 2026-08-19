@@ -3,6 +3,7 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+mod http;
 mod mcp;
 mod service;
 
@@ -53,14 +54,23 @@ fn main() {
             }
             let svc = service::EngineService::new(store, dims, embedder, llm);
             let sock = addr.parse().expect("invalid listen addr");
+            // HTTP 网关（REST + 社区版 Web UI）默认 127.0.0.1:50052，NYLON_HTTP_ADDR=off 关闭
+            let http_addr =
+                std::env::var("NYLON_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:50052".into());
             println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
-            tonic::transport::Server::builder()
+            let grpc = tonic::transport::Server::builder()
                 .add_service(service::pb::memory_engine_server::MemoryEngineServer::new(
-                    svc,
+                    svc.clone(),
                 ))
-                .serve(sock)
-                .await
-                .expect("gRPC server");
+                .serve(sock);
+            if http_addr == "off" {
+                grpc.await.expect("gRPC server");
+            } else {
+                let http = http::serve(svc, &http_addr);
+                tokio::join!(async { grpc.await.expect("gRPC server") }, async {
+                    http.await.expect("http server")
+                },);
+            }
         });
         return;
     }

@@ -42,6 +42,15 @@ Two design rules the experiments forced on us: the **understanding layer lives o
 ```
 
 Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your agent gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node). See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for per-client setup.
+
+## Web Console (built-in)
+
+The engine binary also serves a zero-install web console and REST API (default `http://127.0.0.1:50052`, `NYLON_HTTP_ADDR=off` disables):
+
+![NylonME Console](docs/ui-console.png)
+
+Browse memories with real-time tension, debug resonance queries (seeds, scores, adaptive depth), and weave new memories by hand — same engine, same write path as gRPC/MCP. REST endpoints mirror the gRPC contract; spec: [docs/api/openapi.json](docs/api/openapi.json).
+
 ## Python SDK
 
 `nylon-sdk` wraps the gRPC contract in sync + async clients:

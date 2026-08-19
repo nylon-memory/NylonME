@@ -152,6 +152,7 @@ struct ReflectionJob {
 }
 
 /// MemoryEngine 服务句柄（内部状态互斥保护，Phase 1 单写者够用）。
+#[derive(Clone)]
 pub struct EngineService {
     inner: Arc<Mutex<Inner>>,
     /// 空闲反思队列：异步补常识桥接节点。
@@ -218,6 +219,80 @@ impl EngineService {
             llm,
             reflect_tx,
         }
+    }
+}
+
+/// REST/社区版 UI 的节点摘要（只读视图，写路径仍走 gRPC 契约）。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct NodeSummary {
+    pub id: u32,
+    pub owner_id: String,
+    pub fact: String,
+    pub tension: f32,
+    pub created_at: i64,
+    pub relations: Vec<String>,
+    pub confidence: f32,
+    pub mentions_7d: u32,
+}
+
+/// 引擎运行统计（UI 头部状态条）。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EngineStats {
+    pub nodes: usize,
+    pub edges: usize,
+    pub embed_dims: usize,
+    pub embedder: bool,
+    pub llm: bool,
+}
+
+impl EngineService {
+    /// 分页列出节点（按创建时间倒序），可选按 owner 过滤。
+    pub(crate) fn list_nodes(
+        &self,
+        owner: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<NodeSummary>), Status> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| Status::internal("state lock poisoned"))?;
+        let now = now_secs();
+        let mut all: Vec<NodeSummary> = inner
+            .store
+            .graph()
+            .live_nodes()
+            .filter(|(_, n)| owner.is_none_or(|o| n.owner_id == o))
+            .map(|(id, n)| NodeSummary {
+                id,
+                owner_id: n.owner_id.clone(),
+                fact: n.filaments.fact.clone(),
+                tension: compute_tension(n, now, 1.0),
+                created_at: n.filaments.created_at,
+                relations: n.filaments.relations.clone(),
+                confidence: n.filaments.confidence,
+                mentions_7d: n.filaments.mentions_7d,
+            })
+            .collect();
+        all.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+        let total = all.len();
+        let page = all.into_iter().skip(offset).take(limit).collect();
+        Ok((total, page))
+    }
+
+    /// 引擎运行统计。
+    pub(crate) fn stats(&self) -> Result<EngineStats, Status> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| Status::internal("state lock poisoned"))?;
+        Ok(EngineStats {
+            nodes: inner.store.graph().node_count(),
+            edges: inner.store.graph().edges().len(),
+            embed_dims: inner.index.dims(),
+            embedder: self.embedder.is_some(),
+            llm: self.llm.is_some(),
+        })
     }
 }
 

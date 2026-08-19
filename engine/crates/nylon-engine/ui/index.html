@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NylonME Console</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round"><path d="M4 20V4l16 16V4"/></svg>
+    <span>NylonME <em>Console</em></span>
+  </div>
+  <div class="stats" id="stats">
+    <span class="chip" title="memory nodes"><b id="stat-nodes">–</b> nodes</span>
+    <span class="chip" title="graph edges"><b id="stat-edges">–</b> edges</span>
+    <span class="chip" id="stat-embed" title="embedding channel">embed –</span>
+    <span class="chip" id="stat-llm" title="LLM weave channel">llm –</span>
+  </div>
+  <div class="owner-box">
+    <label for="owner">owner</label>
+    <input id="owner" type="text" value="default" spellcheck="false">
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-view="memories" id="tab-memories">Memories</button>
+  <button class="tab" data-view="resonate" id="tab-resonate">Resonate</button>
+  <button class="tab" data-view="weave" id="tab-weave">Weave</button>
+</nav>
+
+<main>
+  <section id="view-memories" class="view active">
+    <div class="toolbar">
+      <input id="mem-filter" type="search" placeholder="filter facts…" spellcheck="false">
+      <button id="mem-refresh" class="btn" title="reload">Refresh</button>
+      <span class="muted" id="mem-total"></span>
+      <div class="pager">
+        <button id="mem-prev" class="btn icon" title="previous page">‹</button>
+        <span id="mem-page" class="muted">1</span>
+        <button id="mem-next" class="btn icon" title="next page">›</button>
+      </div>
+    </div>
+    <table class="grid">
+      <thead><tr><th class="num">ID</th><th>Fact</th><th class="tension-col">Tension</th><th>Relations</th><th class="num">Mentions</th><th>Created</th></tr></thead>
+      <tbody id="mem-rows"></tbody>
+    </table>
+    <div class="empty muted" id="mem-empty" hidden>no memories yet for this owner</div>
+  </section>
+
+  <section id="view-resonate" class="view">
+    <div class="form-row">
+      <input id="res-query" type="text" placeholder="query — e.g. flight seat preference" spellcheck="false">
+      <input id="res-budget" type="number" value="10" min="1" max="500" title="activation budget (top-k)">
+      <select id="res-hops" title="max graph hops: default = adaptive; 0 = precise recall (no spread)">
+        <option value="">hops: auto</option>
+        <option value="0">hops: 0 (precise)</option>
+        <option value="1">hops: 1</option>
+        <option value="2">hops: 2</option>
+        <option value="3">hops: 3</option>
+      </select>
+      <button id="res-run" class="btn primary">Resonate</button>
+    </div>
+    <div class="muted" id="res-meta"></div>
+    <div id="res-results" class="cards"></div>
+  </section>
+
+  <section id="view-weave" class="view">
+    <div class="weave-cols">
+      <div class="panel">
+        <h3>Single memory</h3>
+        <textarea id="wv-text" rows="3" placeholder="a self-contained fact, e.g. Alice prefers window seats on business trips" spellcheck="false"></textarea>
+        <div class="form-row">
+          <input id="wv-task" type="text" placeholder="task tag (optional)" spellcheck="false">
+          <button id="wv-run" class="btn primary">Weave</button>
+        </div>
+        <div id="wv-result" class="result" hidden></div>
+      </div>
+      <div class="panel">
+        <h3>Session batch <span class="muted">(two-tier write)</span></h3>
+        <textarea id="ws-text" rows="5" placeholder='[{"speaker":"user","text":"…","event_id":"e1"}, …]' spellcheck="false"></textarea>
+        <div class="form-row">
+          <label class="check"><input id="ws-skip" type="checkbox"> skip abstract layer</label>
+          <button id="ws-run" class="btn primary">Weave session</button>
+        </div>
+        <div id="ws-result" class="result" hidden></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <span>Node <b id="d-id" class="mono"></b></span>
+    <button id="d-close" class="btn icon" title="close">×</button>
+  </div>
+  <div class="drawer-body" id="d-body"></div>
+</aside>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>

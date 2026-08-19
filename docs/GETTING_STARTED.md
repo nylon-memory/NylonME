@@ -58,6 +58,10 @@ NYLON_LLM_MODEL=deepseek-v4-flash NYLON_LLM_API_KEY=<your-key> NYLON_LLM_THINKIN
 ./nylon-engine serve 0.0.0.0:50051
 ```
 
+The same binary also serves a **web console + REST API** on `http://127.0.0.1:50052` (override with `NYLON_HTTP_ADDR`, set to `off` to disable). Open it in a browser to browse memories with live tension, debug resonance queries, and weave by hand. REST spec: [api/openapi.json](api/openapi.json).
+
+![NylonME Console](ui-console.png)
+
 Verify with the smoke test (runs weave + get_node + resonate + search):
 
 ```bash
