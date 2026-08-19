@@ -19,7 +19,8 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd -r -m -d /home/nylon nylon
+    && useradd -r -m -d /home/nylon nylon \
+    && mkdir -p /home/nylon/data && chown nylon:nylon /home/nylon/data
 
 COPY --from=builder /build/engine/target/release/nylon-engine /usr/local/bin/nylon-engine
 
