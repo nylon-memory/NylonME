@@ -158,20 +158,33 @@ fn ctx(
 
 // ---------- 静态资源 / 文档 ----------
 
-async fn ui_index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+// UI 资源随二进制升级而变，禁缓存避免升级后浏览器拿到旧页面。
+async fn ui_index() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        INDEX_HTML,
+    )
 }
 
 async fn ui_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
         APP_JS,
     )
 }
 
 async fn ui_css() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
         STYLE_CSS,
     )
 }
