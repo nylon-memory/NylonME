@@ -1,0 +1,19 @@
+NylonME community edition has been installed.
+
+  Release:      {{ .Release.Name }}
+  Engine gRPC:  {{ include "nylonme.fullname" . }}:{{ .Values.service.grpcPort }}
+  Console/REST: http://{{ include "nylonme.fullname" . }}:{{ .Values.service.httpPort }}
+
+Port-forward to browse the console locally:
+
+  kubectl port-forward svc/{{ include "nylonme.fullname" . }} {{ .Values.service.httpPort }}:{{ .Values.service.httpPort }}
+  # then open http://localhost:{{ .Values.service.httpPort }}
+
+{{- if .Values.auth.apiKeysJson }}
+API-key auth is ENABLED — clients must send x-api-key (gRPC metadata or HTTP header).
+{{- else }}
+Auth is in open single-machine mode. Set auth.apiKeysJson to enable tenant API keys.
+{{- end }}
+
+Backup: POST /v1/checkpoint (admin scope), then snapshot the data PVC.
+See docs/BACKUP_RESTORE.md in the repository for the full drill.

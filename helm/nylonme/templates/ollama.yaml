@@ -1,0 +1,99 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nylonme.fullname" . }}-ollama
+  labels:
+    {{- include "nylonme.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "nylonme.name" . }}-ollama
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nylonme.fullname" . }}-ollama-models
+  labels:
+    {{- include "nylonme.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.ollama.persistence.storageClass }}
+  storageClassName: {{ .Values.ollama.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ollama.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nylonme.fullname" . }}-ollama
+  labels:
+    {{- include "nylonme.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nylonme.name" . }}-ollama
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nylonme.name" . }}-ollama
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: ollama
+          image: {{ .Values.ollama.image | quote }}
+          ports:
+            - name: http
+              containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ include "nylonme.fullname" . }}-ollama-models
+---
+# 首次安装后拉取嵌入模型（幂等：模型已存在则秒退）
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nylonme.fullname" . }}-ollama-pull
+  labels:
+    {{- include "nylonme.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pull
+          image: {{ .Values.ollama.image | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              for i in $(seq 1 12); do
+                OLLAMA_HOST=http://{{ include "nylonme.fullname" . }}-ollama:11434 \
+                  ollama pull {{ .Values.ollama.model }} && exit 0
+                sleep 5
+              done
+              exit 1
+{{- end }}

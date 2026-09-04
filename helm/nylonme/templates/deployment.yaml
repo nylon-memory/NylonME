@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nylonme.fullname" . }}
+  labels:
+    {{- include "nylonme.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  # 单写者内嵌存储：滚动期间双 Pod 同写一份 PVC 会损坏 WAL，必须 Recreate
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nylonme.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nylonme.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: engine
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve", "0.0.0.0:{{ .Values.service.grpcPort }}"]
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+            - name: http
+              containerPort: {{ .Values.service.httpPort }}
+          env:
+            - name: NYLON_DATA_DIR
+              value: /home/nylon/data
+            - name: NYLON_HTTP_ADDR
+              value: "0.0.0.0:{{ .Values.service.httpPort }}"
+            - name: NYLON_AUDIT
+              value: {{ .Values.engine.audit | quote }}
+            - name: NYLON_CHECKPOINT_SECS
+              value: {{ .Values.engine.checkpointSecs | quote }}
+            - name: NYLON_EMBED_URL
+              value: {{ include "nylonme.embedUrl" . }}
+            - name: NYLON_EMBED_MODEL
+              value: {{ .Values.embedding.model | quote }}
+            - name: NYLON_EMBED_DIMS
+              value: {{ .Values.embedding.dims | quote }}
+            {{- if .Values.llm.apiKey }}
+            - name: NYLON_LLM_URL
+              value: {{ .Values.llm.url | quote }}
+            - name: NYLON_LLM_MODEL
+              value: {{ .Values.llm.model | quote }}
+            - name: NYLON_LLM_THINKING_OFF
+              value: {{ .Values.llm.thinkingOff | quote }}
+            - name: NYLON_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nylonme.fullname" . }}-secrets
+                  key: llm-api-key
+            {{- end }}
+            {{- if .Values.auth.apiKeysJson }}
+            - name: NYLON_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nylonme.fullname" . }}-secrets
+                  key: api-keys
+            {{- end }}
+            {{- range $k, $v := .Values.engine.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /v1/stats
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /v1/stats
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /home/nylon/data
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "nylonme.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

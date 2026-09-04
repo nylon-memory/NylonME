@@ -356,6 +356,21 @@ impl EngineService {
             llm: self.llm.is_some(),
         })
     }
+
+    /// 手动 checkpoint：快照落盘 + 截断 WAL（L2.4 备份前置步骤）。
+    /// serve 模式另有周期任务自动 checkpoint（NYLON_CHECKPOINT_SECS，默认 600s）。
+    pub(crate) fn checkpoint(&self) -> Result<(), Status> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| Status::internal("state lock poisoned"))?;
+        inner
+            .store
+            .checkpoint()
+            .map_err(|e| Status::internal(format!("checkpoint: {e}")))?;
+        self.audit_op("checkpoint", "", "", "snapshot + wal truncate".into());
+        Ok(())
+    }
 }
 
 /// LLM weave decomposition: extract six-filament structure from raw event.

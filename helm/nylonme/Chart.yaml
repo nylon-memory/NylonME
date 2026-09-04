@@ -1,0 +1,14 @@
+apiVersion: v2
+name: nylonme
+description: NylonME memory engine (single-node community edition) with optional ollama embedding sidecar
+type: application
+version: 0.1.0
+appVersion: "0.2.1"
+keywords:
+  - memory
+  - agent
+  - rag
+  - nylonme
+home: https://github.com/nylon-memory/NylonME
+sources:
+  - https://github.com/nylon-memory/NylonME

@@ -72,6 +72,23 @@ fn main() {
             let http_addr =
                 std::env::var("NYLON_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:50052".into());
             println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
+            // 周期 checkpoint：快照落盘并截断 WAL，控制恢复重放量 + 支持热备份（L2.4）
+            let ckpt_secs: u64 = std::env::var("NYLON_CHECKPOINT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(600);
+            if ckpt_secs > 0 {
+                let svc_ckpt = svc.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(ckpt_secs)).await;
+                        match svc_ckpt.checkpoint() {
+                            Ok(()) => println!("[checkpoint] 快照已落盘，WAL 已截断"),
+                            Err(e) => eprintln!("[checkpoint] 失败: {e}"),
+                        }
+                    }
+                });
+            }
             let grpc = tonic::transport::Server::builder()
                 .add_service(
                     service::pb::memory_engine_server::MemoryEngineServer::with_interceptor(

@@ -1,0 +1,64 @@
+# NylonME community edition — single-node engine + optional ollama embedder.
+# 注意：引擎是单写者内嵌存储，replicas 必须保持 1（HA/集群属 Phase 3 商业版）。
+
+image:
+  repository: ghcr.io/nylon-memory/nylonme
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicas: 1 # 不要调高：内嵌 WAL 存储不支持多写者
+
+service:
+  type: ClusterIP
+  grpcPort: 50051
+  httpPort: 50052
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: "" # 空 = 集群默认 StorageClass
+
+engine:
+  # 审计事件流（L2.3）：默认开；off 关闭
+  audit: "on"
+  # 周期 checkpoint 秒数（0 = 关闭自动 checkpoint）
+  checkpointSecs: "600"
+  # 额外 tuning 环境变量（见 README Tuning 表），原样注入
+  extraEnv: {}
+  # 例：
+  #   NYLON_MAX_SEEDS: "20"
+  #   NYLON_REFLECT_IDLE_SECS: "600"
+
+embedding:
+  # 指向 ollama（本 chart 内置或外部地址二选一）
+  url: "" # 空 = 自动用内置 ollama；外部服务填 http://host:11434/v1/embeddings
+  model: bge-m3
+  dims: "1024"
+
+llm:
+  # 留空则不启用 LLM 编织/反思通道（引擎仍正常运行）
+  url: https://api.deepseek.com/v1/chat/completions
+  model: deepseek-v4-flash
+  thinkingOff: "1"
+  apiKey: "" # 敏感：注入 Secret
+
+auth:
+  # API key 表（L2.2），JSON 数组；非空则注入 Secret 并启用鉴权
+  # 例：apiKeysJson: '[{"key":"nyl_...","tenant":"myteam","scope":"write"}]'
+  apiKeysJson: ""
+
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  model: bge-m3 # 首次安装后由 post-install hook 拉取
+  persistence:
+    size: 10Gi
+    storageClass: ""
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi

@@ -135,6 +135,17 @@ async fn audit_events(
     Ok(Json(serde_json::json!({ "events": events })))
 }
 
+/// 手动触发 checkpoint（L2.4 备份前置）：快照落盘 + 截断 WAL。
+/// 管理操作：鉴权模式下仅 admin 档位可调。
+async fn checkpoint_now(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
+    svc.checkpoint().map_err(map_status)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 /// 把 HTTP 侧已验证的 grant 透传给 service handler（与 gRPC 拦截器同一条比对路径）。
 fn signed_request<T>(grant: Option<crate::auth::KeyGrant>, body: T) -> Request<T> {
     let mut req = Request::new(body);
@@ -432,6 +443,7 @@ pub fn router(svc: EngineService) -> Router {
         .route("/v1/nodes", get(list_nodes))
         .route("/v1/nodes/{id}", get(get_node))
         .route("/v1/audit", get(audit_events))
+        .route("/v1/checkpoint", post(checkpoint_now))
         .route("/v1/weave", post(weave))
         .route("/v1/weave_session", post(weave_session))
         .route("/v1/resonate", post(resonate))
