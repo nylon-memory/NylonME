@@ -16,11 +16,12 @@ jobs:
       - name: Build sdist + wheel
         run: |
           pip install build
-          python -m build sdk/python
+          python -m build sdk/python --outdir dist/
+          python -m build integrations --outdir dist/
       - uses: actions/upload-artifact@v4
         with:
-          name: nylon-sdk-dist
-          path: sdk/python/dist/
+          name: pypi-dist
+          path: dist/
 
   publish:
     needs: build
@@ -30,9 +31,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: nylon-sdk-dist
-          path: sdk/python/dist/
+          name: pypi-dist
+          path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: sdk/python/dist/
+          packages-dir: dist/
+          # nylon-sdk is re-built on every run; skip it silently once the
+          # same version is already on PyPI (new packages still upload).
+          skip-existing: true
