@@ -37,11 +37,17 @@ pub struct Tension {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemoryNode {
     pub id: u64,
+    /// 租户 ID：多租户强制隔离边界（L2.1），存储/索引/查询全链路按 tenant 分区。
+    /// 旧数据（NYL0 格式）解码时回填 DEFAULT_TENANT。
+    pub tenant_id: String,
     pub owner_id: String,
     pub filaments: Filaments,
     pub tension: Tension,
     pub embedding: Vec<f32>,
 }
+
+/// 未显式指定租户时的默认租户（单机/社区版默认空间）。
+pub const DEFAULT_TENANT: &str = "default";
 
 /// 频率强化项：logistic 归一化，F ∈ (1, 2)。
 /// 线性项会让高频记忆全部顶满上限而失去区分度（v0.2 修正）。
@@ -70,6 +76,7 @@ mod tests {
     fn node(decay_rate: f32, mentions: u32) -> MemoryNode {
         MemoryNode {
             id: 1,
+            tenant_id: DEFAULT_TENANT.into(),
             owner_id: "alice".into(),
             filaments: Filaments {
                 fact: "用户喜欢 Python".into(),

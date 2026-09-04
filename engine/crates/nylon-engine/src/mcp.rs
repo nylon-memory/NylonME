@@ -18,19 +18,38 @@ use std::sync::Arc;
 /// 远端引擎桥：实现与 EngineService 相同的 MemoryEngine trait，
 /// 但每个调用都克隆一条廉价 Channel 转发到远端 gRPC 守护进程。
 #[derive(Clone)]
-pub struct RemoteEngine(pb::memory_engine_client::MemoryEngineClient<tonic::transport::Channel>);
+pub struct RemoteEngine {
+    client: pb::memory_engine_client::MemoryEngineClient<tonic::transport::Channel>,
+    /// 远端启用 API key 鉴权（L2.2）时透传的 key（NYLON_API_KEY）。
+    api_key: Option<String>,
+}
 
 impl RemoteEngine {
     /// 连接远端引擎；接受 "host:port" 或 "http(s)://host:port"（与 SDK/CLI 约定一致）。
-    pub async fn connect(target: &str) -> Result<Self, tonic::transport::Error> {
+    /// api_key：远端开启鉴权时随每个请求写入 x-api-key metadata。
+    pub async fn connect(
+        target: &str,
+        api_key: Option<String>,
+    ) -> Result<Self, tonic::transport::Error> {
         let t = target
             .strip_prefix("http://")
             .or_else(|| target.strip_prefix("https://"))
             .unwrap_or(target);
         let url = format!("http://{t}");
-        Ok(Self(
-            pb::memory_engine_client::MemoryEngineClient::connect(url).await?,
-        ))
+        Ok(Self {
+            client: pb::memory_engine_client::MemoryEngineClient::connect(url).await?,
+            api_key,
+        })
+    }
+
+    /// 转发前附加鉴权 metadata。
+    fn sign<T>(&self, mut req: tonic::Request<T>) -> tonic::Request<T> {
+        if let Some(k) = &self.api_key {
+            if let Ok(v) = k.parse() {
+                req.metadata_mut().insert("x-api-key", v);
+            }
+        }
+        req
     }
 }
 
@@ -40,31 +59,31 @@ impl pb::memory_engine_server::MemoryEngine for RemoteEngine {
         &self,
         req: tonic::Request<pb::WeaveRequest>,
     ) -> Result<tonic::Response<pb::WeaveResponse>, tonic::Status> {
-        self.0.clone().weave(req).await
+        self.client.clone().weave(self.sign(req)).await
     }
     async fn weave_session(
         &self,
         req: tonic::Request<pb::WeaveSessionRequest>,
     ) -> Result<tonic::Response<pb::WeaveSessionResponse>, tonic::Status> {
-        self.0.clone().weave_session(req).await
+        self.client.clone().weave_session(self.sign(req)).await
     }
     async fn resonate(
         &self,
         req: tonic::Request<pb::ResonateRequest>,
     ) -> Result<tonic::Response<pb::ResonateResponse>, tonic::Status> {
-        self.0.clone().resonate(req).await
+        self.client.clone().resonate(self.sign(req)).await
     }
     async fn search(
         &self,
         req: tonic::Request<pb::SearchRequest>,
     ) -> Result<tonic::Response<pb::SearchResponse>, tonic::Status> {
-        self.0.clone().search(req).await
+        self.client.clone().search(self.sign(req)).await
     }
     async fn get_node(
         &self,
         req: tonic::Request<pb::GetNodeRequest>,
     ) -> Result<tonic::Response<pb::GetNodeResponse>, tonic::Status> {
-        self.0.clone().get_node(req).await
+        self.client.clone().get_node(self.sign(req)).await
     }
 }
 

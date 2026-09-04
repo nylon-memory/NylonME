@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -14,6 +14,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tonic::Request;
 
+use crate::auth::{http_authorize, Scope};
 use crate::service::{pb, EngineService};
 use pb::memory_engine_server::MemoryEngine;
 
@@ -95,9 +96,19 @@ struct SearchBody {
 
 #[derive(Deserialize)]
 struct ListQuery {
+    tenant: Option<String>,
     owner: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+}
+
+/// 把 HTTP 侧已验证的 grant 透传给 service handler（与 gRPC 拦截器同一条比对路径）。
+fn signed_request<T>(grant: Option<crate::auth::KeyGrant>, body: T) -> Request<T> {
+    let mut req = Request::new(body);
+    if let Some(g) = grant {
+        req.extensions_mut().insert(g);
+    }
+    req
 }
 
 #[derive(Serialize)]
@@ -200,32 +211,46 @@ async fn openapi() -> impl IntoResponse {
 
 // ---------- REST 端点 ----------
 
-async fn stats(State(svc): State<EngineService>) -> Result<impl IntoResponse, ApiError> {
+async fn stats(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    // 全局统计不属于任何租户：只校验 key 与档位，不做租户比对
+    http_authorize(svc.auth(), &headers, Scope::Read, None).map_err(map_status)?;
     svc.stats().map(Json).map_err(map_status)
 }
 
 async fn list_nodes(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant = q.tenant.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    http_authorize(svc.auth(), &headers, Scope::Read, Some(&tenant)).map_err(map_status)?;
     let limit = q.limit.unwrap_or(50).min(500);
     let (total, nodes) = svc
-        .list_nodes(q.owner.as_deref(), q.offset.unwrap_or(0), limit)
+        .list_nodes(&tenant, q.owner.as_deref(), q.offset.unwrap_or(0), limit)
         .map_err(map_status)?;
     Ok(Json(serde_json::json!({ "total": total, "nodes": nodes })))
 }
 
 async fn get_node(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Path(id): Path<u64>,
     Query(q): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let _tenant = q.owner; // tenant 强隔离属 L2.1，当前仅 owner 过滤
+    let tenant = q.tenant.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Read, Some(&tenant)).map_err(map_status)?;
     let resp = svc
-        .get_node(Request::new(pb::GetNodeRequest {
-            tenant_id: DEFAULT_TENANT.into(),
-            node_id: id,
-        }))
+        .get_node(signed_request(
+            grant,
+            pb::GetNodeRequest {
+                tenant_id: tenant,
+                node_id: id,
+            },
+        ))
         .await
         .map_err(map_status)?
         .into_inner();
@@ -238,15 +263,22 @@ async fn get_node(
 
 async fn weave(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Json(b): Json<WeaveBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant = b.tenant_id.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Write, Some(&tenant)).map_err(map_status)?;
     let resp = svc
-        .weave(Request::new(pb::WeaveRequest {
-            tenant_id: b.tenant_id.unwrap_or_else(|| DEFAULT_TENANT.into()),
-            owner_id: b.owner_id,
-            raw_event: b.raw_event,
-            context: ctx(b.task, b.emotion_valence, None),
-        }))
+        .weave(signed_request(
+            grant,
+            pb::WeaveRequest {
+                tenant_id: tenant,
+                owner_id: b.owner_id,
+                raw_event: b.raw_event,
+                context: ctx(b.task, b.emotion_valence, None),
+            },
+        ))
         .await
         .map_err(map_status)?
         .into_inner();
@@ -259,8 +291,12 @@ async fn weave(
 
 async fn weave_session(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Json(b): Json<WeaveSessionBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant = b.tenant_id.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Write, Some(&tenant)).map_err(map_status)?;
     let events: Vec<pb::SessionEvent> = b
         .events
         .into_iter()
@@ -271,12 +307,15 @@ async fn weave_session(
         })
         .collect();
     let resp = svc
-        .weave_session(Request::new(pb::WeaveSessionRequest {
-            tenant_id: b.tenant_id.unwrap_or_else(|| DEFAULT_TENANT.into()),
-            owner_id: b.owner_id,
-            events,
-            skip_abstract: b.skip_abstract.unwrap_or(false),
-        }))
+        .weave_session(signed_request(
+            grant,
+            pb::WeaveSessionRequest {
+                tenant_id: tenant,
+                owner_id: b.owner_id,
+                events,
+                skip_abstract: b.skip_abstract.unwrap_or(false),
+            },
+        ))
         .await
         .map_err(map_status)?
         .into_inner();
@@ -292,16 +331,23 @@ async fn weave_session(
 
 async fn resonate(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Json(b): Json<ResonateBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant = b.tenant_id.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Read, Some(&tenant)).map_err(map_status)?;
     let resp = svc
-        .resonate(Request::new(pb::ResonateRequest {
-            tenant_id: b.tenant_id.unwrap_or_else(|| DEFAULT_TENANT.into()),
-            owner_id: b.owner_id,
-            query: b.query,
-            context: ctx(b.task, b.emotion_valence, b.max_hops),
-            budget: b.budget.unwrap_or(0),
-        }))
+        .resonate(signed_request(
+            grant,
+            pb::ResonateRequest {
+                tenant_id: tenant,
+                owner_id: b.owner_id,
+                query: b.query,
+                context: ctx(b.task, b.emotion_valence, b.max_hops),
+                budget: b.budget.unwrap_or(0),
+            },
+        ))
         .await
         .map_err(map_status)?
         .into_inner();
@@ -313,19 +359,26 @@ async fn resonate(
 
 async fn search(
     State(svc): State<EngineService>,
+    headers: HeaderMap,
     Json(b): Json<SearchBody>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let tenant = b.tenant_id.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Read, Some(&tenant)).map_err(map_status)?;
     let mut bytes = Vec::with_capacity(b.embedding.len() * 4);
     for v in &b.embedding {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
     let resp = svc
-        .search(Request::new(pb::SearchRequest {
-            tenant_id: b.tenant_id.unwrap_or_else(|| DEFAULT_TENANT.into()),
-            owner_id: b.owner_id,
-            query_embedding: bytes,
-            top_k: b.top_k.unwrap_or(10),
-        }))
+        .search(signed_request(
+            grant,
+            pb::SearchRequest {
+                tenant_id: tenant,
+                owner_id: b.owner_id,
+                query_embedding: bytes,
+                top_k: b.top_k.unwrap_or(10),
+            },
+        ))
         .await
         .map_err(map_status)?
         .into_inner();

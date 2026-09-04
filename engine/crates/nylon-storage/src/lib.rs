@@ -232,6 +232,7 @@ mod tests {
     fn node(id: u64, fact: &str) -> MemoryNode {
         MemoryNode {
             id,
+            tenant_id: nylon_core::DEFAULT_TENANT.into(),
             owner_id: "test".into(),
             filaments: Filaments {
                 fact: fact.into(),

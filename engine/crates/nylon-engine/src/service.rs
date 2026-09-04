@@ -19,6 +19,8 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
+use crate::auth::{authorize, ApiKeys, KeyGrant, Scope};
+
 pub mod pb {
     tonic::include_proto!("nylon.v1");
 }
@@ -159,8 +161,10 @@ pub struct EngineService {
     reflect_tx: Option<tokio::sync::mpsc::UnboundedSender<ReflectionJob>>,
     /// 嵌入通道：None 时退回 Phase 1 行为（无向量写入、无向量种子）。
     embedder: Option<Arc<dyn Embedder>>,
-    /// LLM ch: None shi guan bi bian zhi fen jie yu chong tu jian ce.
+    /// LLM 通道：None 时关闭编织分解与冲突检测。
     llm: Option<Arc<dyn ChatModel>>,
+    /// API key 鉴权（L2.2）：None = 开放模式（单机默认）。
+    auth: Option<Arc<ApiKeys>>,
 }
 
 impl EngineService {
@@ -218,7 +222,19 @@ impl EngineService {
             embedder,
             llm,
             reflect_tx,
+            auth: None,
         }
+    }
+
+    /// 启用 API key 鉴权（gRPC 拦截器与 HTTP 网关共用同一张 key 表）。
+    pub fn with_auth(mut self, auth: Option<Arc<ApiKeys>>) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// 鉴权配置（HTTP 网关读取；gRPC 侧由 main.rs 拦截器使用同一配置）。
+    pub(crate) fn auth(&self) -> &Option<Arc<ApiKeys>> {
+        &self.auth
     }
 }
 
@@ -226,6 +242,7 @@ impl EngineService {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct NodeSummary {
     pub id: u32,
+    pub tenant_id: String,
     pub owner_id: String,
     pub fact: String,
     pub tension: f32,
@@ -246,9 +263,10 @@ pub struct EngineStats {
 }
 
 impl EngineService {
-    /// 分页列出节点（按创建时间倒序），可选按 owner 过滤。
+    /// 分页列出节点（按创建时间倒序），按 tenant 强制过滤，可选叠加 owner 过滤。
     pub(crate) fn list_nodes(
         &self,
+        tenant: &str,
         owner: Option<&str>,
         offset: usize,
         limit: usize,
@@ -262,9 +280,10 @@ impl EngineService {
             .store
             .graph()
             .live_nodes()
-            .filter(|(_, n)| owner.is_none_or(|o| n.owner_id == o))
+            .filter(|(_, n)| n.tenant_id == tenant && owner.is_none_or(|o| n.owner_id == o))
             .map(|(id, n)| NodeSummary {
                 id,
+                tenant_id: n.tenant_id.clone(),
                 owner_id: n.owner_id.clone(),
                 fact: n.filaments.fact.clone(),
                 tension: compute_tension(n, now, 1.0),
@@ -451,6 +470,7 @@ impl EngineService {
         };
         let mut node = MemoryNode {
             id: 0, // 全局 ID 分配在 Phase 2 接入；node_id 暂用局部 ID
+            tenant_id: tenant_id.to_string(),
             owner_id: owner_id.to_string(),
             filaments: Filaments {
                 fact,
@@ -500,12 +520,12 @@ impl EngineService {
                 inner.index.add(local, &emb);
             }
 
-            // 自动建边：同 owner 且关系丝重叠的存活历史节点
+            // 自动建边：同 tenant + 同 owner 且关系丝重叠的存活历史节点（L2.1 强制隔离）
             let mut linked = Vec::new();
             let mut edge_ticket = None;
             if !relations.is_empty() {
                 let mut picks: Vec<u32> = Vec::new();
-                // 关系丝倒排索引取候选，凑齐 MAX_AUTO_LINKS 条同 owner 边即停（免全图扫描）
+                // 关系丝倒排索引取候选，凑齐 MAX_AUTO_LINKS 条同租户边即停（免全图扫描）
                 'tags: for tag in &relations {
                     for cand in inner.store.graph().relation_candidates(tag) {
                         if picks.len() >= MAX_AUTO_LINKS {
@@ -514,13 +534,13 @@ impl EngineService {
                         if cand == local || picks.contains(&cand) {
                             continue;
                         }
-                        let is_same_owner = inner
+                        let in_scope = inner
                             .store
                             .graph()
                             .get_node(cand)
-                            .map(|n| n.owner_id == owner_id)
+                            .map(|n| n.tenant_id == tenant_id && n.owner_id == owner_id)
                             .unwrap_or(false);
-                        if is_same_owner {
+                        if in_scope {
                             picks.push(cand);
                         }
                     }
@@ -559,7 +579,7 @@ impl EngineService {
                         break;
                     }
                     if let Some(cn) = inner.store.graph().get_node(cid) {
-                        if cn.owner_id == owner_id {
+                        if cn.tenant_id == tenant_id && cn.owner_id == owner_id {
                             candidates.push((cid, cn.filaments.fact.clone()));
                         }
                     }
@@ -667,7 +687,16 @@ async fn process_reflection_jobs(
         }
         let mut wrote = 0usize;
         for bridge in bridges {
-            match write_world_bridge(inner, embedder, &job.owner_id, &job.fact_ids, bridge).await {
+            match write_world_bridge(
+                inner,
+                embedder,
+                &job.tenant_id,
+                &job.owner_id,
+                &job.fact_ids,
+                bridge,
+            )
+            .await
+            {
                 Ok(()) => wrote += 1,
                 Err(e) => eprintln!("[reflect] 常识桥接写入失败: {e}"),
             }
@@ -684,6 +713,7 @@ async fn process_reflection_jobs(
 async fn write_world_bridge(
     inner: &Arc<Mutex<Inner>>,
     embedder: Option<&Arc<dyn Embedder>>,
+    tenant_id: &str,
     owner_id: &str,
     fact_ids: &[u32],
     bridge: String,
@@ -699,6 +729,7 @@ async fn write_world_bridge(
     let now = now_secs();
     let node = MemoryNode {
         id: 0,
+        tenant_id: tenant_id.to_string(),
         owner_id: owner_id.to_string(),
         filaments: Filaments {
             fact: bridge,
@@ -751,7 +782,9 @@ async fn write_world_bridge(
 #[tonic::async_trait]
 impl MemoryEngine for EngineService {
     async fn weave(&self, req: Request<WeaveRequest>) -> Result<Response<WeaveResponse>, Status> {
+        let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
+        authorize(grant.as_ref(), Scope::Write, &r.tenant_id)?;
         let (local, linked, conflict_nodes) = self
             .weave_one(
                 &r.tenant_id,
@@ -774,7 +807,9 @@ impl MemoryEngine for EngineService {
         &self,
         req: Request<WeaveSessionRequest>,
     ) -> Result<Response<WeaveSessionResponse>, Status> {
+        let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
+        authorize(grant.as_ref(), Scope::Write, &r.tenant_id)?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 均不能为空"));
         }
@@ -923,13 +958,15 @@ impl MemoryEngine for EngineService {
         &self,
         req: Request<ResonateRequest>,
     ) -> Result<Response<ResonateResponse>, Status> {
+        let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
+        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 不能为空"));
         }
         let ctx = to_context(r.context);
         let query = r.query.to_lowercase();
-        // 向量种子（锁外计算）
+        // 向量种子（锁外计算）；HNSW 是全局索引，候选必须按 tenant+owner 过滤（L2.1）
         let mut qvec: Option<Vec<f32>> = None;
         let vec_seeds: Vec<(u32, f32)> =
             if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
@@ -940,7 +977,21 @@ impl MemoryEngine for EngineService {
                             .inner
                             .lock()
                             .map_err(|_| Status::internal("state lock poisoned"))?;
-                        inner.index.search(&v[0], max_seeds())
+                        // 过取 4 倍再按租户过滤，避免过滤后种子不足
+                        inner
+                            .index
+                            .search(&v[0], max_seeds().saturating_mul(4))
+                            .into_iter()
+                            .filter(|(id, _)| {
+                                inner
+                                    .store
+                                    .graph()
+                                    .get_node(*id)
+                                    .map(|n| n.tenant_id == r.tenant_id && n.owner_id == r.owner_id)
+                                    .unwrap_or(false)
+                            })
+                            .take(max_seeds())
+                            .collect()
                     }
                     Err(_) => Vec::new(), // 嵌入服务故障时降级为纯词面
                 }
@@ -972,7 +1023,7 @@ impl MemoryEngine for EngineService {
             // 第一遍：统计词项文档频率（df），IDF 加权——稀有词（实体）权重远高于常见词
             let owner_facts: Vec<(u32, String)> = g
                 .live_nodes()
-                .filter(|(_, n)| n.owner_id == r.owner_id)
+                .filter(|(_, n)| n.tenant_id == r.tenant_id && n.owner_id == r.owner_id)
                 .map(|(id, n)| (id, n.filaments.fact.to_lowercase()))
                 .collect();
             let n_docs = owner_facts.len().max(1) as f32;
@@ -1040,7 +1091,7 @@ impl MemoryEngine for EngineService {
                     .into_iter()
                     .filter(|&id| {
                         g.get_node(id)
-                            .map(|n| n.owner_id == r.owner_id)
+                            .map(|n| n.tenant_id == r.tenant_id && n.owner_id == r.owner_id)
                             .unwrap_or(false)
                     })
                     .map(|id| (id, 0.5f32))
@@ -1050,7 +1101,7 @@ impl MemoryEngine for EngineService {
         if seeds.is_empty() {
             let mut recent: Vec<(u32, i64)> = g
                 .live_nodes()
-                .filter(|(_, n)| n.owner_id == r.owner_id)
+                .filter(|(_, n)| n.tenant_id == r.tenant_id && n.owner_id == r.owner_id)
                 .map(|(id, n)| (id, n.filaments.created_at))
                 .collect();
             recent.sort_by_key(|&(_, ts)| std::cmp::Reverse(ts));
@@ -1107,6 +1158,10 @@ impl MemoryEngine for EngineService {
             .into_iter()
             .filter_map(|(id, score)| {
                 let n = g.get_node(id)?;
+                // 隔离兜底：扩散结果不允许跨租户（L2.1）
+                if n.tenant_id != r.tenant_id {
+                    return None;
+                }
                 if n.filaments
                     .relations
                     .iter()
@@ -1127,7 +1182,9 @@ impl MemoryEngine for EngineService {
         &self,
         req: Request<SearchRequest>,
     ) -> Result<Response<SearchResponse>, Status> {
+        let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
+        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 不能为空"));
         }
@@ -1153,11 +1210,18 @@ impl MemoryEngine for EngineService {
         }
         let k = if r.top_k == 0 { 10 } else { r.top_k as usize };
         let g = inner.store.graph();
+        // HNSW 全局索引：过取 4 倍再按 tenant+owner 过滤（L2.1 强制隔离）
         let out = inner
             .index
-            .search(&query, k)
+            .search(&query, k.saturating_mul(4))
             .into_iter()
-            .filter_map(|(id, sim)| g.get_node(id).map(|n| to_activated(id, sim, n)))
+            .filter_map(|(id, sim)| {
+                g.get_node(id).and_then(|n| {
+                    (n.tenant_id == r.tenant_id && n.owner_id == r.owner_id)
+                        .then(|| to_activated(id, sim, n))
+                })
+            })
+            .take(k)
             .collect();
         Ok(Response::new(SearchResponse { neighbors: out }))
     }
@@ -1166,7 +1230,9 @@ impl MemoryEngine for EngineService {
         &self,
         req: Request<GetNodeRequest>,
     ) -> Result<Response<GetNodeResponse>, Status> {
+        let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
+        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
         if r.tenant_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id 不能为空"));
         }
@@ -1181,6 +1247,13 @@ impl MemoryEngine for EngineService {
             .graph()
             .get_node(local)
             .ok_or_else(|| Status::not_found(format!("node {} 不存在或已删除", r.node_id)))?;
+        // 跨租户读取一律按不存在处理，不暴露节点存在性（L2.1）
+        if node.tenant_id != r.tenant_id {
+            return Err(Status::not_found(format!(
+                "node {} 不存在或已删除",
+                r.node_id
+            )));
+        }
         let tension = compute_tension(node, now_secs(), 1.0);
         Ok(Response::new(GetNodeResponse {
             node_id: r.node_id,
@@ -1196,6 +1269,29 @@ mod tests {
     use nylon_embed::StubEmbedder;
     use nylon_llm::StubChatModel;
     use std::sync::Arc;
+
+    fn svc_with_embed(dims: usize) -> (EngineService, Arc<StubEmbedder>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = PersistentGraph::open(dir.path()).unwrap();
+        let embedder = Arc::new(StubEmbedder::new(dims));
+        let svc = EngineService::new(store, dims, Some(embedder.clone()), None);
+        // tempdir 借 service 的 PersistentGraph 存活不够——泄漏句柄换取测试期有效
+        std::mem::forget(dir);
+        (svc, embedder)
+    }
+
+    async fn weave_as(svc: &EngineService, tenant: &str, owner: &str, fact: &str) -> u64 {
+        let resp = svc
+            .weave(Request::new(WeaveRequest {
+                tenant_id: tenant.into(),
+                owner_id: owner.into(),
+                raw_event: fact.into(),
+                context: None,
+            }))
+            .await
+            .unwrap();
+        resp.into_inner().node_id
+    }
 
     #[tokio::test]
     async fn weave_with_stub_llm_no_candidates() {
@@ -1228,5 +1324,164 @@ mod tests {
         let resp2 = svc.weave(tonic::Request::new(req2)).await.unwrap();
         let body2 = resp2.into_inner();
         assert!(body2.node_id > 0);
+    }
+
+    /// L2.1：跨租户共振不可见（词面 + 最近兜底两条种子路径都覆盖）。
+    #[tokio::test]
+    async fn resonate_isolated_across_tenants() {
+        let (svc, _emb) = svc_with_embed(64);
+        let a_id = weave_as(&svc, "tenant-a", "alice", "喜欢手冲咖啡和浅烘豆").await;
+        let b_id = weave_as(&svc, "tenant-b", "alice", "喜欢手冲咖啡和深烘豆").await;
+
+        let resp = svc
+            .resonate(Request::new(ResonateRequest {
+                tenant_id: "tenant-a".into(),
+                owner_id: "alice".into(),
+                query: "咖啡".into(),
+                context: None,
+                budget: 10,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let ids: Vec<u64> = resp.activated.iter().map(|n| n.node_id).collect();
+        assert!(ids.contains(&a_id), "本租户节点应命中: {ids:?}");
+        assert!(
+            !ids.contains(&b_id),
+            "跨租户节点不得出现在共振结果: {ids:?}"
+        );
+
+        // 空查询走最近节点兜底，同样不得跨租户
+        let resp = svc
+            .resonate(Request::new(ResonateRequest {
+                tenant_id: "tenant-b".into(),
+                owner_id: "alice".into(),
+                query: String::new(),
+                context: None,
+                budget: 10,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let ids: Vec<u64> = resp.activated.iter().map(|n| n.node_id).collect();
+        assert!(ids.contains(&b_id));
+        assert!(!ids.contains(&a_id), "兜底种子也不得跨租户: {ids:?}");
+    }
+
+    /// L2.1：向量检索 Search 不得跨租户（历史漏洞：HNSW 全局索引未过滤）。
+    #[tokio::test]
+    async fn search_isolated_across_tenants() {
+        let (svc, emb) = svc_with_embed(64);
+        let a_id = weave_as(&svc, "tenant-a", "alice", "节点 A 的内容").await;
+        let _b_id = weave_as(&svc, "tenant-b", "alice", "节点 B 的内容").await;
+
+        let q = emb.embed(&["节点".to_string()]).await.unwrap().remove(0);
+        let mut bytes = Vec::with_capacity(q.len() * 4);
+        for v in &q {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let resp = svc
+            .search(Request::new(SearchRequest {
+                tenant_id: "tenant-a".into(),
+                owner_id: "alice".into(),
+                query_embedding: bytes,
+                top_k: 10,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            resp.neighbors.iter().all(|n| n.node_id == a_id),
+            "Search 结果必须全部属于 tenant-a: {:?}",
+            resp.neighbors.iter().map(|n| n.node_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// L2.1：GetNode 跨租户按不存在处理（不暴露存在性）。
+    #[tokio::test]
+    async fn get_node_cross_tenant_not_found() {
+        let (svc, _emb) = svc_with_embed(64);
+        let a_id = weave_as(&svc, "tenant-a", "alice", "只有 tenant-a 可见").await;
+
+        let err = svc
+            .get_node(Request::new(GetNodeRequest {
+                tenant_id: "tenant-b".into(),
+                node_id: a_id,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+
+        let ok = svc
+            .get_node(Request::new(GetNodeRequest {
+                tenant_id: "tenant-a".into(),
+                node_id: a_id,
+            }))
+            .await;
+        assert!(ok.is_ok());
+    }
+
+    /// L2.1：自动建边不跨租户（同关系丝、同 owner、不同 tenant 不得建边）。
+    #[tokio::test]
+    async fn auto_link_never_crosses_tenant() {
+        let (svc, _emb) = svc_with_embed(64);
+        let req = |tenant: &str, fact: &str| {
+            Request::new(WeaveRequest {
+                tenant_id: tenant.into(),
+                owner_id: "alice".into(),
+                raw_event: fact.into(),
+                context: Some(pb::ContextSpectrum {
+                    task: Some("咖啡".into()),
+                    emotion_valence: None,
+                    device: None,
+                    max_hops: None,
+                }),
+            })
+        };
+        svc.weave(req("tenant-a", "手冲咖啡笔记")).await.unwrap();
+        svc.weave(req("tenant-b", "手冲咖啡笔记")).await.unwrap();
+        // 第三条与第一条同租户：只能链上第一条（第二条跨租户不可见）
+        let resp = svc
+            .weave(req("tenant-a", "再来一条咖啡记录"))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            resp.linked_nodes.len(),
+            1,
+            "跨租户节点不得被自动建边: {:?}",
+            resp.linked_nodes
+        );
+    }
+
+    /// L2.2：grant 与请求体租户不匹配时拒绝（gRPC 拦截器之后的 handler 比对）。
+    #[tokio::test]
+    async fn grant_tenant_mismatch_rejected() {
+        let (svc, _emb) = svc_with_embed(64);
+        let mut req = Request::new(WeaveRequest {
+            tenant_id: "tenant-b".into(),
+            owner_id: "alice".into(),
+            raw_event: "越权写入".into(),
+            context: None,
+        });
+        req.extensions_mut().insert(KeyGrant {
+            tenant: "tenant-a".into(),
+            scope: crate::auth::Scope::Write,
+        });
+        let err = svc.weave(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+        // admin 通配放行
+        let mut req = Request::new(WeaveRequest {
+            tenant_id: "tenant-b".into(),
+            owner_id: "alice".into(),
+            raw_event: "管理端写入".into(),
+            context: None,
+        });
+        req.extensions_mut().insert(KeyGrant {
+            tenant: "*".into(),
+            scope: crate::auth::Scope::Admin,
+        });
+        assert!(svc.weave(req).await.is_ok());
     }
 }

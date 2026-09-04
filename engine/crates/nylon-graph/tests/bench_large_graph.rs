@@ -35,6 +35,7 @@ impl Lcg {
 fn synth_node(i: usize, rng: &mut Lcg) -> MemoryNode {
     MemoryNode {
         id: i as u64,
+        tenant_id: nylon_core::DEFAULT_TENANT.into(),
         owner_id: "bench".into(),
         filaments: Filaments {
             fact: format!("合成事实 {i}"),

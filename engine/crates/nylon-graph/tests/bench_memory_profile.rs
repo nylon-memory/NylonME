@@ -59,6 +59,7 @@ impl Lcg {
 fn realistic_node(i: usize) -> MemoryNode {
     MemoryNode {
         id: i as u64,
+        tenant_id: nylon_core::DEFAULT_TENANT.into(),
         owner_id: format!("user-{:05}", i % 50_000),
         filaments: Filaments {
             fact: format!(
@@ -83,6 +84,7 @@ fn realistic_node(i: usize) -> MemoryNode {
 fn minimal_node(i: usize) -> MemoryNode {
     MemoryNode {
         id: i as u64,
+        tenant_id: nylon_core::DEFAULT_TENANT.into(),
         owner_id: "bench".into(),
         filaments: Filaments {
             fact: format!("合成事实 {i}"),

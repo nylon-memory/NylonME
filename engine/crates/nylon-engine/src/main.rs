@@ -3,6 +3,7 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+mod auth;
 mod http;
 mod mcp;
 mod service;
@@ -13,6 +14,7 @@ use nylon_vector::{BruteForceIndex, VectorIndex};
 fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNode {
     MemoryNode {
         id,
+        tenant_id: nylon_core::DEFAULT_TENANT.into(),
         owner_id: "alice".into(),
         filaments: Filaments {
             fact: fact.into(),
@@ -34,6 +36,11 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("genkey") {
+        // 生成一把 API key；写入 NYLON_API_KEYS(_FILE) 后引擎才启用鉴权
+        println!("{}", auth::generate_key());
+        return;
+    }
     if args.get(1).map(|s| s.as_str()) == Some("serve") {
         let addr = args
             .get(2)
@@ -52,16 +59,24 @@ fn main() {
             if embedder.is_some() {
                 println!("嵌入通道已启用 (NYLON_EMBED_URL)");
             }
-            let svc = service::EngineService::new(store, dims, embedder, llm);
+            let keys = auth::ApiKeys::from_env();
+            if let Some(k) = &keys {
+                println!("API key 鉴权已启用（{} 把 key，L2.2）", k.len());
+            }
+            let svc =
+                service::EngineService::new(store, dims, embedder, llm).with_auth(keys.clone());
             let sock = addr.parse().expect("invalid listen addr");
             // HTTP 网关（REST + 社区版 Web UI）默认 127.0.0.1:50052，NYLON_HTTP_ADDR=off 关闭
             let http_addr =
                 std::env::var("NYLON_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:50052".into());
             println!("nylon-engine gRPC listening on {addr} (data={data}, dims={dims})");
             let grpc = tonic::transport::Server::builder()
-                .add_service(service::pb::memory_engine_server::MemoryEngineServer::new(
-                    svc.clone(),
-                ))
+                .add_service(
+                    service::pb::memory_engine_server::MemoryEngineServer::with_interceptor(
+                        svc.clone(),
+                        move |req: tonic::Request<()>| auth::grpc_intercept(&keys, req),
+                    ),
+                )
                 .serve(sock);
             if http_addr == "off" {
                 grpc.await.expect("gRPC server");
@@ -79,7 +94,8 @@ fn main() {
         if let Ok(server) = std::env::var("NYLON_SERVER") {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(async move {
-                match mcp::RemoteEngine::connect(&server).await {
+                let api_key = std::env::var("NYLON_API_KEY").ok();
+                match mcp::RemoteEngine::connect(&server, api_key).await {
                     Ok(remote) => {
                         eprintln!("nylon-engine mcp: 远程桥接 -> {server}");
                         if let Err(e) = mcp::run_stdio_remote(remote).await {

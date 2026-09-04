@@ -3,7 +3,7 @@
   "info": {
     "title": "NylonME Memory Engine REST API",
     "version": "0.2.1",
-    "description": "REST translation of the gRPC contract (proto/nylon/v1/memory.proto). Both entry points share the same write path. Served by the engine itself (default http://127.0.0.1:50052).",
+    "description": "REST translation of the gRPC contract (proto/nylon/v1/memory.proto). Both entry points share the same write path. Served by the engine itself (default http://127.0.0.1:50052). When the engine has API-key auth enabled (NYLON_API_KEYS / NYLON_API_KEYS_FILE), pass credentials via the `x-api-key` header or `Authorization: Bearer <key>`; each key is bound to a tenant and a scope (read/write/admin). Without keys configured the engine runs in open single-machine mode.",
     "license": { "name": "Apache-2.0" }
   },
   "servers": [{ "url": "http://127.0.0.1:50052" }],
@@ -25,6 +25,7 @@
         "summary": "List memory nodes (newest first)",
         "operationId": "listNodes",
         "parameters": [
+          { "name": "tenant", "in": "query", "schema": { "type": "string", "default": "default" }, "description": "Tenant scope (enforced; cross-tenant data is never listed)" },
           { "name": "owner", "in": "query", "schema": { "type": "string" }, "description": "Filter by owner_id" },
           { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
           { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 500 } }
@@ -44,7 +45,10 @@
       "get": {
         "summary": "Read a single node with real-time tension",
         "operationId": "getNode",
-        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "tenant", "in": "query", "schema": { "type": "string", "default": "default" }, "description": "Tenant scope (cross-tenant reads return 404)" }
+        ],
         "responses": {
           "200": { "description": "Node detail", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NodeDetail" } } } },
           "404": { "description": "Node not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
@@ -235,6 +239,11 @@
         "type": "object",
         "properties": { "error": { "type": "string" } }
       }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": { "type": "apiKey", "in": "header", "name": "x-api-key" },
+      "BearerAuth": { "type": "http", "scheme": "bearer" }
     }
-  }
+  },
+  "security": [{ "ApiKeyAuth": [] }, { "BearerAuth": [] }]
 }

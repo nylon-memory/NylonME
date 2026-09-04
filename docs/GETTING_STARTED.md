@@ -199,4 +199,27 @@ Set `NYLON_SERVER` and the same `mcp` subcommand becomes a thin bridge: every to
 
 The remote side is just the normal daemon (`nylon-engine serve 0.0.0.0:50051`). In bridge mode the embedding/LLM env vars belong on the server — the client side only needs `NYLON_SERVER`, `NYLON_OWNER` and optionally `NYLON_TENANT`.
 
-Optional env for MCP mode: `NYLON_DATA_DIR` (default `~/.nylonme/data`), `NYLON_OWNER` (default memory namespace), `NYLON_EMBED_URL`/`NYLON_EMBED_MODEL`/`NYLON_EMBED_DIMS` (semantic recall via ollama), `NYLON_LLM_*` (session-level fact weaving).
+Optional env for MCP mode: `NYLON_DATA_DIR` (default `~/.nylonme/data`), `NYLON_OWNER` (default memory namespace), `NYLON_API_KEY` (when the remote engine has auth enabled), `NYLON_EMBED_URL`/`NYLON_EMBED_MODEL`/`NYLON_EMBED_DIMS` (semantic recall via ollama), `NYLON_LLM_*` (session-level fact weaving).
+
+## Multi-tenancy and API keys (team sharing)
+
+Every memory belongs to a **tenant** (team/space) and an **owner** (user/project inside the tenant). Isolation is enforced inside the engine: weaving, auto-linking, resonance seeds and spread, vector search and node reads are all scoped to the requesting tenant — a cross-tenant read is indistinguishable from a missing node.
+
+By default the engine runs in **open mode** (single machine, no keys) and stays fully backward compatible. To share one daemon across a team, enable API-key auth on the server:
+
+```bash
+# 1. mint keys
+nylon-engine genkey   # -> nyl_<32 hex>
+
+# 2. hand them to the engine (file or inline JSON)
+export NYLON_API_KEYS='[
+  {"key": "nyl_aaa...", "tenant": "myteam", "scope": "read"},
+  {"key": "nyl_bbb...", "tenant": "myteam", "scope": "write"},
+  {"key": "nyl_ccc...", "tenant": "*",      "scope": "admin"}
+]'
+# or: export NYLON_API_KEYS_FILE=/etc/nylonme/keys.json
+
+nylon-engine serve 0.0.0.0:50051
+```
+
+Scopes: `read` (resonate/search/get), `write` (read + weave), `admin` (write + wildcard `"*"` tenant). Each key is bound to one tenant; a request whose `tenant_id` doesn't match the key is rejected. Clients pass the key as gRPC metadata `x-api-key`, or HTTP header `x-api-key: <key>` / `Authorization: Bearer <key>`. The MCP bridge and `nylon_cli` forward `NYLON_API_KEY` automatically.

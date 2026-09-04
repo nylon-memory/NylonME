@@ -1,5 +1,8 @@
 //! gRPC 端到端冒烟：内存随机端口起服务，真实 client 走一遍四个 RPC。
 
+#[path = "../src/auth.rs"]
+mod auth;
+
 #[path = "../src/service.rs"]
 mod service;
 
@@ -23,6 +26,107 @@ async fn start() -> (String, tempfile::TempDir) {
             .unwrap();
     });
     (addr, dir)
+}
+
+/// 带 API key 鉴权的服务（L2.2）：keys JSON 注入拦截器。
+async fn start_with_auth(keys_json: &str) -> (String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = PersistentGraph::open(dir.path()).unwrap();
+    let keys = Some(std::sync::Arc::new(
+        auth::ApiKeys::parse(keys_json).unwrap(),
+    ));
+    let svc =
+        EngineService::new(store, service::DEFAULT_EMBED_DIMS, None, None).with_auth(keys.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(MemoryEngineServer::with_interceptor(svc, move |req| {
+                auth::grpc_intercept(&keys, req)
+            }))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    (addr, dir)
+}
+
+/// 给请求附加 x-api-key metadata。
+fn with_key<T>(mut req: tonic::Request<T>, key: &str) -> tonic::Request<T> {
+    req.metadata_mut().insert("x-api-key", key.parse().unwrap());
+    req
+}
+
+/// L2.2 端到端：真实 tonic server 下，拦截器 → handler 的 grant 传递与档位/租户判定。
+#[tokio::test]
+async fn grpc_auth_end_to_end() {
+    let (addr, _dir) = start_with_auth(
+        r#"[
+            {"key": "k-read", "tenant": "t1", "scope": "read"},
+            {"key": "k-write", "tenant": "t1", "scope": "write"}
+        ]"#,
+    )
+    .await;
+    let mut client = MemoryEngineClient::connect(addr).await.unwrap();
+
+    // 无 key：Unauthenticated
+    let err = client.weave(weave_req("无 key 写入")).await.unwrap_err();
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+
+    // 只读 key 写入：PermissionDenied（handler 档位检查）
+    let err = client
+        .weave(with_key(
+            tonic::Request::new(weave_req("只读 key 写入")),
+            "k-read",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+    // 写 key + 正确租户：成功
+    let resp = client
+        .weave(with_key(
+            tonic::Request::new(weave_req("授权写入成功")),
+            "k-write",
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let node_id = resp.node_id;
+
+    // 写 key 但请求体是别的租户：PermissionDenied（handler 租户比对）
+    let mut cross = weave_req("跨租户写入");
+    cross.tenant_id = "t2".into();
+    let err = client
+        .weave(with_key(tonic::Request::new(cross), "k-write"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+    // 只读 key 读同租户：成功
+    let got = client
+        .get_node(with_key(
+            tonic::Request::new(GetNodeRequest {
+                tenant_id: "t1".into(),
+                node_id,
+            }),
+            "k-read",
+        ))
+        .await;
+    assert!(got.is_ok(), "只读 key 应能读同租户节点: {got:?}");
+
+    // 只读 key 读其他租户：PermissionDenied
+    let err = client
+        .get_node(with_key(
+            tonic::Request::new(GetNodeRequest {
+                tenant_id: "t2".into(),
+                node_id,
+            }),
+            "k-read",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
 }
 
 fn weave_req(fact: &str) -> WeaveRequest {

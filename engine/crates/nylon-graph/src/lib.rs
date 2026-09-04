@@ -591,6 +591,7 @@ mod tests {
     fn node(fact: &str, relations: &[&str]) -> MemoryNode {
         MemoryNode {
             id: 0,
+            tenant_id: nylon_core::DEFAULT_TENANT.into(),
             owner_id: "alice".into(),
             filaments: Filaments {
                 fact: fact.into(),
