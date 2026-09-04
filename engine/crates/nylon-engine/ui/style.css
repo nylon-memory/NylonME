@@ -10,6 +10,7 @@
   --amber: #f5a524;
   --danger: #f87171;
   --shadow: -12px 0 32px rgba(0,0,0,.5);
+  --topbar-h: 56px;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,6 +24,7 @@ body {
 
 .topbar {
   display: flex; align-items: center; gap: 16px;
+  height: var(--topbar-h); flex: none;
   padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
@@ -122,7 +124,7 @@ main { flex: 1; overflow: auto; padding: 16px; }
 .result a { color: var(--accent); cursor: pointer; text-decoration: none; font-family: var(--mono); }
 
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 420px;
+  position: fixed; top: var(--topbar-h); right: 0; bottom: 0; width: 420px;
   background: var(--panel); border-left: 1px solid var(--border);
   box-shadow: var(--shadow); z-index: 20;
   display: flex; flex-direction: column;

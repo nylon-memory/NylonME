@@ -69,6 +69,22 @@ with NylonClient("127.0.0.1:50051", owner="alice") as client:
 ```
 
 See [sdk/python/README.md](sdk/python/README.md).
+
+## Framework Integrations
+
+LangChain and LlamaIndex adapters live in [integrations/](integrations/README.md):
+
+```bash
+pip install "nylonme-integrations[langchain]"   # or [llamaindex]
+```
+
+```python
+from nylonme_integrations.langchain import NylonMeRetriever
+
+retriever = NylonMeRetriever(target="127.0.0.1:50051", owner="alice")
+docs = retriever.invoke("flight seat preference")
+```
+
 ## Quick Start
 
 ### Run with Docker (one command, no Rust toolchain needed)
