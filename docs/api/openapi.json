@@ -55,6 +55,27 @@
         }
       }
     },
+    "/v1/audit": {
+      "get": {
+        "summary": "Query audit events (newest first; L2.3 audit event stream)",
+        "operationId": "listAuditEvents",
+        "parameters": [
+          { "name": "tenant", "in": "query", "schema": { "type": "string" }, "description": "Filter by tenant (tenant-bound keys are always limited to their own tenant)" },
+          { "name": "owner", "in": "query", "schema": { "type": "string" }, "description": "Filter by owner_id" },
+          { "name": "action", "in": "query", "schema": { "type": "string", "enum": ["weave", "weave_session", "resonate", "search", "get_node", "denied"] } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 200, "maximum": 1000 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent audit events from the in-memory window (full history persists in audit.jsonl)",
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "events": { "type": "array", "items": { "$ref": "#/components/schemas/AuditEvent" } },
+              "disabled": { "type": "boolean" }
+            } } } }
+          }
+        }
+      }
+    },
     "/v1/weave": {
       "post": {
         "summary": "Weave a raw event into memory (filament decomposition + auto-linking + conflict detection)",
@@ -238,6 +259,16 @@
       "Error": {
         "type": "object",
         "properties": { "error": { "type": "string" } }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "properties": {
+          "ts": { "type": "integer", "format": "int64" },
+          "action": { "type": "string" },
+          "tenant": { "type": "string" },
+          "owner": { "type": "string" },
+          "detail": { "type": "string" }
+        }
       }
     },
     "securitySchemes": {

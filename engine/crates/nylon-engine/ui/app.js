@@ -8,6 +8,9 @@ const I18N = {
   en: {
     "stats.nodes": "nodes", "stats.edges": "edges",
     "tab.memories": "Memories", "tab.resonate": "Resonate", "tab.weave": "Weave",
+    "tab.audit": "Audit",
+    "audit.allActions": "all actions", "audit.empty": "no audit events",
+    "th.time": "Time", "th.action": "Action", "th.tenant": "Tenant", "th.owner": "Owner", "th.detail": "Detail",
     "scope.all": "all owners", "scope.mine": "current owner",
     "btn.refresh": "Refresh",
     "th.fact": "Fact", "th.tension": "Tension", "th.relations": "Relations", "th.mentions": "Mentions", "th.created": "Created",
@@ -48,6 +51,9 @@ const I18N = {
   zh: {
     "stats.nodes": "节点", "stats.edges": "边",
     "tab.memories": "记忆", "tab.resonate": "共振", "tab.weave": "编织",
+    "tab.audit": "审计",
+    "audit.allActions": "全部动作", "audit.empty": "暂无审计事件",
+    "th.time": "时间", "th.action": "动作", "th.tenant": "租户", "th.owner": "归属", "th.detail": "细节",
     "scope.all": "全部 owner", "scope.mine": "仅当前 owner",
     "btn.refresh": "刷新",
     "th.fact": "事实", "th.tension": "张力", "th.relations": "关系", "th.mentions": "提及", "th.created": "创建时间",
@@ -172,8 +178,30 @@ document.querySelectorAll(".tab").forEach((b) =>
   b.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === b));
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + b.dataset.view));
+    if (b.dataset.view === "audit") loadAudit();
   })
 );
+
+/* ---------- audit (L2.3) ---------- */
+async function loadAudit() {
+  try {
+    const action = $("audit-action").value;
+    const d = await api(`/v1/audit?limit=300${action ? `&action=${encodeURIComponent(action)}` : ""}`);
+    const rows = d.events || [];
+    $("audit-rows").innerHTML = rows.map((e) => `
+      <tr>
+        <td class="muted" title="${new Date(e.ts * 1000).toLocaleString()}">${timeAgo(e.ts)}</td>
+        <td><span class="rel-chip${e.action === "denied" ? " denied" : ""}">${esc(e.action)}</span></td>
+        <td class="mono">${esc(e.tenant)}</td>
+        <td class="mono">${esc(e.owner)}</td>
+        <td class="fact-cell" title="${esc(e.detail)}">${esc(e.detail)}</td>
+      </tr>`).join("");
+    $("audit-empty").hidden = rows.length > 0;
+    $("audit-total").textContent = rows.length ? `${rows.length}` : "";
+  } catch (e) { toast(e.message); }
+}
+$("audit-refresh").addEventListener("click", loadAudit);
+$("audit-action").addEventListener("change", loadAudit);
 
 /* ---------- stats ---------- */
 async function loadStats() {

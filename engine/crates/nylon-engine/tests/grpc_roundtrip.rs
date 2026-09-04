@@ -1,5 +1,8 @@
 //! gRPC 端到端冒烟：内存随机端口起服务，真实 client 走一遍四个 RPC。
 
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 

@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
+use crate::audit::Audit;
 use crate::auth::{authorize, ApiKeys, KeyGrant, Scope};
 
 pub mod pb {
@@ -165,6 +166,8 @@ pub struct EngineService {
     llm: Option<Arc<dyn ChatModel>>,
     /// API key 鉴权（L2.2）：None = 开放模式（单机默认）。
     auth: Option<Arc<ApiKeys>>,
+    /// 审计事件流（L2.3）：None = 关闭（NYLON_AUDIT=off 或未挂接）。
+    audit: Option<Audit>,
 }
 
 impl EngineService {
@@ -223,6 +226,7 @@ impl EngineService {
             llm,
             reflect_tx,
             auth: None,
+            audit: None,
         }
     }
 
@@ -230,6 +234,45 @@ impl EngineService {
     pub fn with_auth(mut self, auth: Option<Arc<ApiKeys>>) -> Self {
         self.auth = auth;
         self
+    }
+
+    /// 挂接审计事件流（serve / MCP 内嵌模式由 main.rs 按数据目录启动）。
+    pub fn with_audit(mut self, audit: Option<Audit>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// 审计查询入口（REST /v1/audit）。
+    pub(crate) fn audit(&self) -> Option<&Audit> {
+        self.audit.as_ref()
+    }
+
+    /// 记录一次操作（审计关闭时为零开销空调用）。
+    fn audit_op(&self, action: &str, tenant: &str, owner: &str, detail: String) {
+        if let Some(a) = &self.audit {
+            a.emit(action, tenant, owner, detail);
+        }
+    }
+
+    /// 鉴权 + 审计一体：拒绝时先落一条 denied 事件再返回错误（L2.3）。
+    fn check(
+        &self,
+        grant: Option<&KeyGrant>,
+        scope: Scope,
+        tenant: &str,
+        action: &str,
+        owner: &str,
+    ) -> Result<(), Status> {
+        if let Err(s) = authorize(grant, scope, tenant) {
+            self.audit_op(
+                "denied",
+                tenant,
+                owner,
+                format!("{action}: {}", s.message()),
+            );
+            return Err(s);
+        }
+        Ok(())
     }
 
     /// 鉴权配置（HTTP 网关读取；gRPC 侧由 main.rs 拦截器使用同一配置）。
@@ -784,7 +827,13 @@ impl MemoryEngine for EngineService {
     async fn weave(&self, req: Request<WeaveRequest>) -> Result<Response<WeaveResponse>, Status> {
         let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
-        authorize(grant.as_ref(), Scope::Write, &r.tenant_id)?;
+        self.check(
+            grant.as_ref(),
+            Scope::Write,
+            &r.tenant_id,
+            "weave",
+            &r.owner_id,
+        )?;
         let (local, linked, conflict_nodes) = self
             .weave_one(
                 &r.tenant_id,
@@ -794,6 +843,17 @@ impl MemoryEngine for EngineService {
                 WeaveLlmMode::Full,
             )
             .await?;
+        self.audit_op(
+            "weave",
+            &r.tenant_id,
+            &r.owner_id,
+            format!(
+                "node={} linked={} conflicts={}",
+                local,
+                linked.len(),
+                conflict_nodes.len()
+            ),
+        );
         Ok(Response::new(WeaveResponse {
             node_id: local as u64,
             linked_nodes: linked,
@@ -809,7 +869,13 @@ impl MemoryEngine for EngineService {
     ) -> Result<Response<WeaveSessionResponse>, Status> {
         let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
-        authorize(grant.as_ref(), Scope::Write, &r.tenant_id)?;
+        self.check(
+            grant.as_ref(),
+            Scope::Write,
+            &r.tenant_id,
+            "weave_session",
+            &r.owner_id,
+        )?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 均不能为空"));
         }
@@ -948,6 +1014,12 @@ impl MemoryEngine for EngineService {
                     .map_err(|e| Status::internal(format!("wal durability: {e}")))?;
             }
         }
+        self.audit_op(
+            "weave_session",
+            &r.tenant_id,
+            &r.owner_id,
+            format!("leaves={} facts={}", leaf_nodes.len(), fact_nodes.len()),
+        );
         Ok(Response::new(WeaveSessionResponse {
             leaf_nodes,
             fact_nodes,
@@ -960,7 +1032,13 @@ impl MemoryEngine for EngineService {
     ) -> Result<Response<ResonateResponse>, Status> {
         let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
-        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
+        self.check(
+            grant.as_ref(),
+            Scope::Read,
+            &r.tenant_id,
+            "resonate",
+            &r.owner_id,
+        )?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 不能为空"));
         }
@@ -1154,7 +1232,7 @@ impl MemoryEngine for EngineService {
                 activated.sort_by(|a, b| b.1.total_cmp(&a.1));
             }
         }
-        let out = activated
+        let out: Vec<_> = activated
             .into_iter()
             .filter_map(|(id, score)| {
                 let n = g.get_node(id)?;
@@ -1172,6 +1250,17 @@ impl MemoryEngine for EngineService {
                 Some(to_activated(id, score, n))
             })
             .collect();
+        self.audit_op(
+            "resonate",
+            &r.tenant_id,
+            &r.owner_id,
+            format!(
+                "query={:.80} hits={} seeds={}",
+                r.query,
+                out.len(),
+                seeds.len()
+            ),
+        );
         Ok(Response::new(ResonateResponse {
             activated: out,
             seed_ids: seeds.iter().map(|&(sid, _)| sid as u64).collect(),
@@ -1184,7 +1273,13 @@ impl MemoryEngine for EngineService {
     ) -> Result<Response<SearchResponse>, Status> {
         let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
-        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
+        self.check(
+            grant.as_ref(),
+            Scope::Read,
+            &r.tenant_id,
+            "search",
+            &r.owner_id,
+        )?;
         if r.tenant_id.is_empty() || r.owner_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id / owner_id 不能为空"));
         }
@@ -1211,7 +1306,7 @@ impl MemoryEngine for EngineService {
         let k = if r.top_k == 0 { 10 } else { r.top_k as usize };
         let g = inner.store.graph();
         // HNSW 全局索引：过取 4 倍再按 tenant+owner 过滤（L2.1 强制隔离）
-        let out = inner
+        let out: Vec<_> = inner
             .index
             .search(&query, k.saturating_mul(4))
             .into_iter()
@@ -1223,6 +1318,12 @@ impl MemoryEngine for EngineService {
             })
             .take(k)
             .collect();
+        self.audit_op(
+            "search",
+            &r.tenant_id,
+            &r.owner_id,
+            format!("top_k={} hits={}", k, out.len()),
+        );
         Ok(Response::new(SearchResponse { neighbors: out }))
     }
 
@@ -1232,7 +1333,7 @@ impl MemoryEngine for EngineService {
     ) -> Result<Response<GetNodeResponse>, Status> {
         let grant = req.extensions().get::<KeyGrant>().cloned();
         let r = req.into_inner();
-        authorize(grant.as_ref(), Scope::Read, &r.tenant_id)?;
+        self.check(grant.as_ref(), Scope::Read, &r.tenant_id, "get_node", "")?;
         if r.tenant_id.is_empty() {
             return Err(Status::invalid_argument("tenant_id 不能为空"));
         }
@@ -1249,12 +1350,24 @@ impl MemoryEngine for EngineService {
             .ok_or_else(|| Status::not_found(format!("node {} 不存在或已删除", r.node_id)))?;
         // 跨租户读取一律按不存在处理，不暴露节点存在性（L2.1）
         if node.tenant_id != r.tenant_id {
+            self.audit_op(
+                "get_node",
+                &r.tenant_id,
+                "",
+                format!("node={} miss(cross-tenant)", r.node_id),
+            );
             return Err(Status::not_found(format!(
                 "node {} 不存在或已删除",
                 r.node_id
             )));
         }
         let tension = compute_tension(node, now_secs(), 1.0);
+        self.audit_op(
+            "get_node",
+            &r.tenant_id,
+            &node.owner_id,
+            format!("node={}", r.node_id),
+        );
         Ok(Response::new(GetNodeResponse {
             node_id: r.node_id,
             filaments: Some(to_pb_filaments(&node.filaments)),

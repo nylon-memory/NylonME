@@ -1,4 +1,7 @@
 //! NylonME 通用 CLI：weave / resonate / get，供 Codex 插件经 plink 远程调用。
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 

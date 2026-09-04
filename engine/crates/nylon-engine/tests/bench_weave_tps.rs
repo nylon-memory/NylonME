@@ -4,6 +4,9 @@
 //! 成功指标（路线图 2.4）：记忆写入 > 10K TPS。
 //! 注意当前每次 Weave 都有 WAL fsync（单条刷盘），group commit 是 Phase 2 优化项。
 
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 

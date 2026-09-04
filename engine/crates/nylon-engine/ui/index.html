@@ -40,6 +40,7 @@ try {
   <button class="tab active" data-view="memories" id="tab-memories" data-i18n="tab.memories">Memories</button>
   <button class="tab" data-view="resonate" id="tab-resonate" data-i18n="tab.resonate">Resonate</button>
   <button class="tab" data-view="weave" id="tab-weave" data-i18n="tab.weave">Weave</button>
+  <button class="tab" data-view="audit" id="tab-audit" data-i18n="tab.audit">Audit</button>
 </nav>
 
 <main>
@@ -103,6 +104,27 @@ try {
         <div id="ws-result" class="result" hidden></div>
       </div>
     </div>
+  </section>
+
+  <section id="view-audit" class="view">
+    <div class="toolbar">
+      <select id="audit-action">
+        <option value="" data-i18n="audit.allActions">all actions</option>
+        <option value="weave">weave</option>
+        <option value="weave_session">weave_session</option>
+        <option value="resonate">resonate</option>
+        <option value="search">search</option>
+        <option value="get_node">get_node</option>
+        <option value="denied">denied</option>
+      </select>
+      <button id="audit-refresh" class="btn" data-i18n-title="tip.reload" title="reload" data-i18n="btn.refresh">Refresh</button>
+      <span class="muted" id="audit-total"></span>
+    </div>
+    <table class="grid">
+      <thead><tr><th data-i18n="th.time">Time</th><th data-i18n="th.action">Action</th><th data-i18n="th.tenant">Tenant</th><th data-i18n="th.owner">Owner</th><th data-i18n="th.detail">Detail</th></tr></thead>
+      <tbody id="audit-rows"></tbody>
+    </table>
+    <div class="empty muted" id="audit-empty" hidden data-i18n="audit.empty">no audit events</div>
   </section>
 </main>
 

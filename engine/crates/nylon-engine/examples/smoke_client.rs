@@ -1,4 +1,7 @@
 //! 远程冒烟客户端：对 NYLON_SERVER（默认 http://127.0.0.1:50051）跑一遍四个 RPC。
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 

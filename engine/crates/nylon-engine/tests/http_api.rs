@@ -1,6 +1,9 @@
 //! REST 网关集成测试：与 gRPC 共享同一 EngineService 写路径。
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 #[path = "../src/http.rs"]

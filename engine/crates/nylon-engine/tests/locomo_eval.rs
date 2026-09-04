@@ -11,6 +11,9 @@
 //! 检索/激活层的证据召回率，不是端到端 QA 准确率（后者需要 LLM 生成 + 裁判）。
 //! category=5 为对抗题（答案"未提及"），不计入。
 
+#[path = "../src/audit.rs"]
+mod audit;
+
 #[path = "../src/auth.rs"]
 mod auth;
 

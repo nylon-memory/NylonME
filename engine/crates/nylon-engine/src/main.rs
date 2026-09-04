@@ -3,6 +3,7 @@
 
 use nylon_core::{Filaments, MemoryNode, Tension};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
+mod audit;
 mod auth;
 mod http;
 mod mcp;
@@ -63,8 +64,9 @@ fn main() {
             if let Some(k) = &keys {
                 println!("API key 鉴权已启用（{} 把 key，L2.2）", k.len());
             }
-            let svc =
-                service::EngineService::new(store, dims, embedder, llm).with_auth(keys.clone());
+            let svc = service::EngineService::new(store, dims, embedder, llm)
+                .with_auth(keys.clone())
+                .with_audit(audit::Audit::start(std::path::Path::new(&data)));
             let sock = addr.parse().expect("invalid listen addr");
             // HTTP 网关（REST + 社区版 Web UI）默认 127.0.0.1:50052，NYLON_HTTP_ADDR=off 关闭
             let http_addr =
@@ -126,7 +128,8 @@ fn main() {
             let store = PersistentGraph::open(&data).expect("open persistent store");
             let llm = nylon_llm::llm_from_env();
             let embedder = nylon_embed::embedder_from_env(dims);
-            let svc = service::EngineService::new(store, dims, embedder, llm);
+            let svc = service::EngineService::new(store, dims, embedder, llm)
+                .with_audit(audit::Audit::start(std::path::Path::new(&data)));
             if let Err(e) = mcp::run_stdio(svc).await {
                 eprintln!("mcp server error: {e}");
                 std::process::exit(1);
