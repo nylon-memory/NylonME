@@ -75,6 +75,26 @@ fn main() {
         return;
     }
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
+        // 远程桥接模式：设 NYLON_SERVER 就把 MCP 调用转发到远端引擎（多机共享记忆库）
+        if let Ok(server) = std::env::var("NYLON_SERVER") {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            rt.block_on(async move {
+                match mcp::RemoteEngine::connect(&server).await {
+                    Ok(remote) => {
+                        eprintln!("nylon-engine mcp: 远程桥接 -> {server}");
+                        if let Err(e) = mcp::run_stdio_remote(remote).await {
+                            eprintln!("mcp server error: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("无法连接远端引擎 NYLON_SERVER={server}: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            });
+            return;
+        }
         let dims: usize = std::env::var("NYLON_EMBED_DIMS")
             .ok()
             .and_then(|v| v.parse().ok())

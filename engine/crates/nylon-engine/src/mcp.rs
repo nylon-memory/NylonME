@@ -1,5 +1,10 @@
 //! MCP (Model Context Protocol) stdio server —— 单二进制内嵌引擎，
 //! Claude Code / Cursor / Codex / VS Code Copilot 等 MCP 客户端直接拉起本进程即可拥有长期记忆。
+//!
+//! 两种模式：
+//! - 本地内嵌（默认）：进程内打开 NYLON_DATA_DIR 数据目录，单机使用；
+//! - 远程桥接（设 NYLON_SERVER）：工具调用经 gRPC 转发到远端引擎，
+//!   本进程不持有数据，多机共享服务端同一份记忆库。
 use crate::service::{pb, EngineService};
 use rmcp::{
     handler::server::wrapper::Parameters,
@@ -10,9 +15,62 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// 远端引擎桥：实现与 EngineService 相同的 MemoryEngine trait，
+/// 但每个调用都克隆一条廉价 Channel 转发到远端 gRPC 守护进程。
+#[derive(Clone)]
+pub struct RemoteEngine(pb::memory_engine_client::MemoryEngineClient<tonic::transport::Channel>);
+
+impl RemoteEngine {
+    /// 连接远端引擎；接受 "host:port" 或 "http(s)://host:port"（与 SDK/CLI 约定一致）。
+    pub async fn connect(target: &str) -> Result<Self, tonic::transport::Error> {
+        let t = target
+            .strip_prefix("http://")
+            .or_else(|| target.strip_prefix("https://"))
+            .unwrap_or(target);
+        let url = format!("http://{t}");
+        Ok(Self(
+            pb::memory_engine_client::MemoryEngineClient::connect(url).await?,
+        ))
+    }
+}
+
+#[tonic::async_trait]
+impl pb::memory_engine_server::MemoryEngine for RemoteEngine {
+    async fn weave(
+        &self,
+        req: tonic::Request<pb::WeaveRequest>,
+    ) -> Result<tonic::Response<pb::WeaveResponse>, tonic::Status> {
+        self.0.clone().weave(req).await
+    }
+    async fn weave_session(
+        &self,
+        req: tonic::Request<pb::WeaveSessionRequest>,
+    ) -> Result<tonic::Response<pb::WeaveSessionResponse>, tonic::Status> {
+        self.0.clone().weave_session(req).await
+    }
+    async fn resonate(
+        &self,
+        req: tonic::Request<pb::ResonateRequest>,
+    ) -> Result<tonic::Response<pb::ResonateResponse>, tonic::Status> {
+        self.0.clone().resonate(req).await
+    }
+    async fn search(
+        &self,
+        req: tonic::Request<pb::SearchRequest>,
+    ) -> Result<tonic::Response<pb::SearchResponse>, tonic::Status> {
+        self.0.clone().search(req).await
+    }
+    async fn get_node(
+        &self,
+        req: tonic::Request<pb::GetNodeRequest>,
+    ) -> Result<tonic::Response<pb::GetNodeResponse>, tonic::Status> {
+        self.0.clone().get_node(req).await
+    }
+}
+
 #[derive(Clone)]
 pub struct NylonMcp {
-    svc: Arc<EngineService>,
+    svc: Arc<dyn pb::memory_engine_server::MemoryEngine>,
     tenant: String,
     default_owner: String,
 }
@@ -164,12 +222,24 @@ impl ServerHandler for NylonMcp {
     }
 }
 
-/// 启动 stdio MCP server（进程内嵌引擎，数据落盘 NYLON_DATA_DIR 或 ~/.nylonme/data）。
+/// 本地内嵌模式：进程内嵌引擎，数据落盘 NYLON_DATA_DIR 或 ~/.nylonme/data。
 pub async fn run_stdio(svc: EngineService) -> Result<(), Box<dyn std::error::Error>> {
+    run(Arc::new(svc)).await
+}
+
+/// 远程桥接模式：MCP 工具调用全部转发到 NYLON_SERVER 指向的远端引擎，
+/// 本进程不持有任何记忆数据——多机共享服务端同一份记忆库。
+pub async fn run_stdio_remote(remote: RemoteEngine) -> Result<(), Box<dyn std::error::Error>> {
+    run(Arc::new(remote)).await
+}
+
+async fn run(
+    svc: Arc<dyn pb::memory_engine_server::MemoryEngine>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let tenant = std::env::var("NYLON_TENANT").unwrap_or_else(|_| "default".into());
     let owner = std::env::var("NYLON_OWNER").unwrap_or_else(|_| "default".into());
     let server = NylonMcp {
-        svc: Arc::new(svc),
+        svc,
         tenant,
         default_owner: owner,
     };
