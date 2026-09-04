@@ -176,6 +176,27 @@ args = ["mcp"]
 NYLON_OWNER = "my-project"
 ```
 
-The agent then gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node by id). Point it at a shared engine instead by keeping the gRPC daemon mode (`serve`) and calling `nylon_cli` — see the LAN deployment pattern in the repo wiki/discussions.
+The agent then gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node by id).
+
+### Share one engine across machines (remote bridge)
+
+Set `NYLON_SERVER` and the same `mcp` subcommand becomes a thin bridge: every tool call is forwarded to the remote engine over gRPC, the local process holds **no data**, and multiple machines/IDEs share one memory store:
+
+```json
+{
+  "mcpServers": {
+    "nylonme": {
+      "command": "/path/to/nylon-engine",
+      "args": ["mcp"],
+      "env": {
+        "NYLON_SERVER": "192.168.1.5:50051",
+        "NYLON_OWNER": "my-project"
+      }
+    }
+  }
+}
+```
+
+The remote side is just the normal daemon (`nylon-engine serve 0.0.0.0:50051`). In bridge mode the embedding/LLM env vars belong on the server — the client side only needs `NYLON_SERVER`, `NYLON_OWNER` and optionally `NYLON_TENANT`.
 
 Optional env for MCP mode: `NYLON_DATA_DIR` (default `~/.nylonme/data`), `NYLON_OWNER` (default memory namespace), `NYLON_EMBED_URL`/`NYLON_EMBED_MODEL`/`NYLON_EMBED_DIMS` (semantic recall via ollama), `NYLON_LLM_*` (session-level fact weaving).
