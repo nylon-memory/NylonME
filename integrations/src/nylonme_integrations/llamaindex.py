@@ -9,7 +9,7 @@ LlamaIndex retriever returning ``NodeWithScore`` objects.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from llama_index.core.retrievers import BaseRetriever
@@ -26,11 +26,24 @@ from ._core import build_client, node_metadata, resonate_records
 class NylonMeRetriever(BaseRetriever):
     """LlamaIndex retriever backed by NylonME resonance recall."""
 
-    target: str = "127.0.0.1:50051"
-    owner: str = "default"
-    tenant: str = "default"
-    budget: int = 5
-    task: Optional[str] = None
+    def __init__(
+        self,
+        target: str = "127.0.0.1:50051",
+        owner: str = "default",
+        tenant: str = "default",
+        budget: int = 5,
+        task: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
+        # llama-index-core >= 0.11 BaseRetriever is a plain class with an
+        # explicit __init__ (no pydantic fields), so config must be stored
+        # as instance attributes after super().__init__.
+        super().__init__(**kwargs)
+        self.target = target
+        self.owner = owner
+        self.tenant = tenant
+        self.budget = budget
+        self.task = task
 
     def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
         query = query_bundle.query_str
