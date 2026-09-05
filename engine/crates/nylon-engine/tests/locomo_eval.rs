@@ -84,6 +84,12 @@ async fn locomo_evidence_recall() {
                     .and_then(|v| v.parse().ok())
             })
     };
+    // 失败解剖：NYLON_EVAL_DUMP_MISS=1 打印未命中题的题目/证据/top-10 实际返回；
+    // NYLON_EVAL_DUMP_CAT=3 只看某类（默认全部）。evidence_pos = 证据在完整 budget 内的最早位次。
+    let dump_miss = std::env::var("NYLON_EVAL_DUMP_MISS").is_ok();
+    let dump_cat: Option<i64> = std::env::var("NYLON_EVAL_DUMP_CAT")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败"))
             .expect("解析 JSON 失败");
@@ -163,6 +169,20 @@ async fn locomo_evidence_recall() {
         sessions.sort_by_key(|k| k.trim_start_matches("session_").parse::<u32>().unwrap_or(0));
 
         let mut dia2nodes: HashMap<String, Vec<u64>> = HashMap::new();
+        // dia_id -> "speaker: text"，供失败解剖 dump 证据原文
+        let mut dia2text: HashMap<String, String> = HashMap::new();
+        if dump_miss {
+            for sess in &sessions {
+                for t in conv_obj[sess.as_str()].as_array().cloned().unwrap_or_default() {
+                    if let (Some(d), Some(txt)) = (t["dia_id"].as_str(), t["text"].as_str()) {
+                        dia2text.insert(
+                            d.to_string(),
+                            format!("{}: {}", t["speaker"].as_str().unwrap_or(""), txt),
+                        );
+                    }
+                }
+            }
+        }
         for sess in sessions {
             let turns = conv_obj[sess].as_array().cloned().unwrap_or_default();
             if session_weave {
@@ -329,6 +349,32 @@ async fn locomo_evidence_recall() {
             }
             if seed_hit {
                 entry.2 += 1;
+            }
+            if dump_miss && !ok && dump_cat.map(|c| c == cat).unwrap_or(true) {
+                // 证据在完整 budget（默认 32）内的最早位次：None=完全没召回，11+=排序问题
+                let evidence_pos = evidence
+                    .iter()
+                    .filter_map(|e| dia2nodes.get(e))
+                    .flatten()
+                    .filter_map(|n| {
+                        resp.activated
+                            .iter()
+                            .position(|a| a.node_id == *n)
+                            .map(|p| p + 1)
+                    })
+                    .min();
+                println!("\n[MISS] sample={sample} cat={cat} seed_hit={seed_hit} evidence_pos={evidence_pos:?}");
+                println!("  Q: {question}");
+                for e in &evidence {
+                    let txt = dia2text.get(e).map(|s| s.as_str()).unwrap_or("");
+                    let snip: String = txt.chars().take(100).collect();
+                    println!("  E[{e}]: {snip}");
+                }
+                for (i, a) in resp.activated.iter().take(RECALL_K).enumerate() {
+                    let fact = a.filaments.as_ref().map(|f| f.fact.as_str()).unwrap_or("");
+                    let snip: String = fact.chars().take(90).collect();
+                    println!("  {:>2}. n{} r={:.3} {}", i + 1, a.node_id, a.resonance, snip);
+                }
             }
         }
     }

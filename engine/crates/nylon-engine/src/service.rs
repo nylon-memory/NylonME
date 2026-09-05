@@ -1219,8 +1219,8 @@ impl MemoryEngine for EngineService {
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .unwrap_or(0.0);
-        let mut activated =
-            g.resonate_opts(&seeds, &ctx, now_secs(), budget, tension_floor, seed_quota);
+        // 种子保底提升统一在向量重排之后做（服务侧），否则重排会打乱图内的提升结果
+        let mut activated = g.resonate_opts(&seeds, &ctx, now_secs(), budget, tension_floor, 0);
         // 向量重排：用查询向量对激活集做直接余弦相似度混合打分，校正共振排序
         if rerank_alpha > 0.0 {
             if let Some(q) = &qvec {
@@ -1246,6 +1246,23 @@ impl MemoryEngine for EngineService {
                 }
                 activated.sort_by(|a, b| b.1.total_cmp(&a.1));
             }
+        }
+        // 种子保底：直接命中的种子提升置顶（取重排后种子的相对顺序），
+        // 防止词面/向量双通道的精确命中被高张力扩散邻居挤出 Top-K
+        if seed_quota > 0 {
+            let seed_set: std::collections::HashSet<u32> =
+                seeds.iter().map(|&(s, _)| s).collect();
+            let mut hoisted: Vec<(u32, f32)> = Vec::new();
+            let mut rest: Vec<(u32, f32)> = Vec::with_capacity(activated.len());
+            for item in activated {
+                if hoisted.len() < seed_quota && seed_set.contains(&item.0) {
+                    hoisted.push(item);
+                } else {
+                    rest.push(item);
+                }
+            }
+            hoisted.extend(rest);
+            activated = hoisted;
         }
         let out: Vec<_> = activated
             .into_iter()
