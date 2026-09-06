@@ -30,6 +30,32 @@ use std::collections::HashMap;
 
 const RECALL_K: usize = 10;
 
+/// 网络抖动重试：LLM/嵌入服务瞬时不可达时指数退避重试，
+/// 避免 1 小时长跑评测因一次网卡掉线全盘作废（2026-09-06 两次踩坑）。
+/// 注意：weave_session 中途失败可能已有部分叶子上库，重试会产生少量重复节点，
+/// 评测口径下可接受（生产路径不重试，由调用方决定语义）。
+async fn rpc_with_retry<F, Fut, T>(what: &str, mut f: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<tonic::Response<T>, tonic::Status>>,
+{
+    let mut delay = 5u64;
+    for attempt in 1..=8u32 {
+        match f().await {
+            Ok(resp) => return resp.into_inner(),
+            Err(e) => {
+                if attempt == 8 {
+                    panic!("{what} 重试 8 次仍失败: {e:?}");
+                }
+                eprintln!("[eval] {what} 失败（第 {attempt}/8 次），{delay}s 后重试: {e}");
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                delay = (delay * 3).min(120);
+            }
+        }
+    }
+    unreachable!()
+}
+
 /// 逐轮原文编织（叶子层）：raw_event = "speaker: text"，dia_id -> 节点映射。
 async fn weave_turns(
     client: &mut MemoryEngineClient<tonic::transport::Channel>,
@@ -203,16 +229,21 @@ async fn locomo_evidence_recall() {
                     })
                     .collect();
                 if !events.is_empty() {
-                    let resp = client
-                        .weave_session(WeaveSessionRequest {
-                            tenant_id: "locomo".into(),
-                            owner_id: sample.clone(),
-                            events,
-                            skip_abstract: false,
-                        })
-                        .await
-                        .unwrap()
-                        .into_inner();
+                    let resp = rpc_with_retry("weave_session", || {
+                        let mut c = client.clone();
+                        let events = events.clone();
+                        let owner = sample.clone();
+                        async move {
+                            c.weave_session(WeaveSessionRequest {
+                                tenant_id: "locomo".into(),
+                                owner_id: owner,
+                                events,
+                                skip_abstract: false,
+                            })
+                            .await
+                        }
+                    })
+                    .await;
                     for en in &resp.leaf_nodes {
                         if !en.event_id.is_empty() {
                             dia2nodes
@@ -289,25 +320,30 @@ async fn locomo_evidence_recall() {
             if let Ok(v) = std::env::var(format!("NYLON_CAT{cat}_RERANK")) {
                 std::env::set_var("NYLON_RERANK_VEC", &v);
             }
-            let resp = client
-                .resonate(ResonateRequest {
-                    tenant_id: "locomo".into(),
-                    owner_id: sample.clone(),
-                    query: expanded.into(),
-                    context: cat_hops(cat).map(|h| ContextSpectrum {
-                        task: None,
-                        emotion_valence: None,
-                        device: None,
-                        max_hops: Some(h),
-                    }),
-                    budget: std::env::var("NYLON_BUDGET")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(32),
-                })
-                .await
-                .unwrap()
-                .into_inner();
+            let resp = rpc_with_retry("resonate", || {
+                let mut c = client.clone();
+                let owner = sample.clone();
+                let query = expanded.clone();
+                async move {
+                    c.resonate(ResonateRequest {
+                        tenant_id: "locomo".into(),
+                        owner_id: owner,
+                        query,
+                        context: cat_hops(cat).map(|h| ContextSpectrum {
+                            task: None,
+                            emotion_valence: None,
+                            device: None,
+                            max_hops: Some(h),
+                        }),
+                        budget: std::env::var("NYLON_BUDGET")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(32),
+                    })
+                    .await
+                }
+            })
+            .await;
             match &saved_seeds {
                 Some(v) => std::env::set_var("NYLON_MAX_SEEDS", v),
                 None => std::env::remove_var("NYLON_MAX_SEEDS"),
