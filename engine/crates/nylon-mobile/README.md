@@ -42,12 +42,12 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
 
 ## 路线图（骨架 -> 产品）
 
-1. **逻辑对齐**：`service.rs` 的完整编织/共振/反思逻辑抽取为共享库后，本 crate 收敛为薄绑定；
+1. ~~逻辑对齐~~ **已完成**：逻辑抽至 `nylon-service::EngineCore`，服务端（gRPC）与端上共用同一份编织/共振/检索实现，本 crate 为薄绑定；
 2. **端上嵌入**：新增 `OnnxEmbedder`（tract + 量化小模型），dims 须与索引维度一致，换模型需重嵌；
 3. **生命周期**：checkpoint 挂接 App onPause/onMemoryWarning；WAL 恢复开箱即用；
 4. **CI**：release workflow 增加 Android/iOS target 与绑定产物发布。
 
-## 当前刻意差异（相对服务端）
+## 与服务的差异说明
 
-- 关系丝启发式抽取支持 CJK 二字组（服务端纯字母切分对中文日常对话抽不出关系丝）；
-- 嵌入通道留空：未接入端上嵌入前，共振走词面种子 + 图扩散，语义召回能力受限。
+- 嵌入/LLM 通道默认留空（端上模型接入前，共振走词面种子 + 图扩散）；
+- 端上为单租户（DEFAULT_TENANT）单 owner；CJK 关系丝抽取已在 core 层实现，两端行为一致。

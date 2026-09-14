@@ -12,5 +12,7 @@ crate-type = ["cdylib", "staticlib"]
 uniffi = "0.29"
 nylon-core = { path = "../nylon-core" }
 nylon-graph = { path = "../nylon-graph" }
+nylon-service = { path = "../nylon-service" }
 nylon-storage = { path = "../nylon-storage" }
-nylon-embed = { path = "../nylon-embed" }
+tokio = { version = "1", features = ["rt"] }
+

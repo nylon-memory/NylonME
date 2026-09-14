@@ -12,6 +12,7 @@ nylon-vector = { path = "../nylon-vector" }
 nylon-storage = { path = "../nylon-storage" }
 nylon-embed = { path = "../nylon-embed" }
 nylon-llm = { path = "../nylon-llm" }
+nylon-service = { path = "../nylon-service" }
 async-trait = "0.1"
 tonic = "0.14"
 tonic-prost = "0.14"
@@ -32,3 +33,5 @@ tower = { version = "0.5", features = ["util"] }
 [build-dependencies]
 tonic-prost-build = "0.14"
 protoc-bin-vendored = "3"
+
+

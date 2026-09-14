@@ -1102,6 +1102,7 @@ dependencies = [
  "nylon-embed",
  "nylon-graph",
  "nylon-llm",
+ "nylon-service",
  "nylon-storage",
  "nylon-vector",
  "prost",
@@ -1143,10 +1144,27 @@ name = "nylon-mobile"
 version = "0.1.0"
 dependencies = [
  "nylon-core",
+ "nylon-graph",
+ "nylon-service",
+ "nylon-storage",
+ "tokio",
+ "uniffi",
+]
+
+[[package]]
+name = "nylon-service"
+version = "0.1.0"
+dependencies = [
+ "nylon-core",
  "nylon-embed",
  "nylon-graph",
+ "nylon-llm",
  "nylon-storage",
- "uniffi",
+ "nylon-vector",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

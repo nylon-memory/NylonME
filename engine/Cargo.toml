@@ -9,9 +9,11 @@ members = [
     "crates/nylon-embed",
     "crates/nylon-llm",
     "crates/nylon-mobile",
+    "crates/nylon-service",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+
