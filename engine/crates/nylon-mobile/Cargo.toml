@@ -1,0 +1,16 @@
+[package]
+name = "nylon-mobile"
+description = "UniFFI in-process bindings for the NylonME memory engine (Android Kotlin / iOS Swift)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+uniffi = "0.29"
+nylon-core = { path = "../nylon-core" }
+nylon-graph = { path = "../nylon-graph" }
+nylon-storage = { path = "../nylon-storage" }
+nylon-embed = { path = "../nylon-embed" }

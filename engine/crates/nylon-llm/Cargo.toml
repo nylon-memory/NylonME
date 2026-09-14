@@ -7,9 +7,17 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# TLS 按目标平台分流：服务器/桌面用 native-tls（系统 Schannel/OpenSSL），
+# 移动端用 rustls——纯 Rust 无 C 编译器依赖（本机 windows-gnu 工具链无 gcc，
+# ring/aws-lc-rs 编不过；Android NDK / iOS clang 下 rustls 正常）。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
