@@ -18,9 +18,11 @@ LoCoMo evidence recall@10, full 10-session corpus (1536 answerable QA, lexical +
 | + dual-layer write (leaf turns + session-level LLM facts) | 79.2% |
 | + adaptive resonance depth (Cat4 single-hop queries skip diffusion) | 80.1% |
 | + query-vector rerank of the activated set | **84.6%** |
-| + async commonsense reflection (world-knowledge bridges) | **85.3%** |
+| + async commonsense reflection (world-knowledge bridges) | **85.4%** |
 
-Per-category (full corpus): multi-hop 84.8%, temporal 86.6%, commonsense 60.9%, single-hop 87.6%.
+Per-category recall (full corpus): multi-hop 82.6%, temporal 89.4%, commonsense 63.0%, single-hop 87.3%.
+
+End-to-end QA (LLM answers from the retrieved top-10, judged): **75.4%** paper-caliber (Mem0 Appendix A wording), **70.1%** strict. Full methodology, per-category table and variance notes: [docs/LOCOMO_BENCHMARK.md](docs/LOCOMO_BENCHMARK.md).
 
 Two design rules the experiments forced on us: the **understanding layer lives on the write side** (the LLM is a compiler that turns raw events into retrievable structure; query-side LLM expansion measured net-zero), and **both layers must coexist** (abstract-layer-only retrieval drops the score to 67.3%).
 
