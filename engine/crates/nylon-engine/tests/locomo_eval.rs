@@ -167,6 +167,15 @@ async fn locomo_evidence_recall() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(RECALL_K);
+    // 分题型自适应宽度（NYLON_EVAL_CTX_K_CAT1/2/3/4，缺省回落 CTX_K）：
+    // CTX_K=15 全量显示 Cat3 回退 65.2→60.9（开放域题被宽上下文的干扰项带偏，
+    // 翻转 +1/-5），其余类全涨。按题型路由宽度让每类用自己的最优口径。
+    let ctx_k_for = |cat: i64| -> usize {
+        std::env::var(format!("NYLON_EVAL_CTX_K_CAT{}", cat))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(ctx_k)
+    };
     let data: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("读取数据集失败"))
             .expect("解析 JSON 失败");
@@ -703,7 +712,7 @@ async fn locomo_evidence_recall() {
                     })
                     // 附赠通道开启时推断不占 Top-10 证据名额，名额由后续证据补位
                     .filter(|a| !(infer_bonus > 0 && is_inferred(a)))
-                    .take(ctx_k)
+                    .take(ctx_k_for(cat))
                     .filter_map(|a| a.filaments.as_ref().map(|f| f.fact.clone()))
                     .collect();
                 if infer_bonus > 0 {
