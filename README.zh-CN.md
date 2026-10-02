@@ -67,7 +67,7 @@ dsh plugin --profile web add <nylon/plugins/dsh-nylonme-memory>
 
 ![NylonME Console](docs/ui-console-zh.png)
 
-六个视图：**总览**（统计卡片、最新记忆、活动流、张力分布直方图）、**记忆**（浏览/过滤，实时张力）、**图谱**（零依赖力导向记忆网络图——引擎核心叙事的可视化）、**共振**（调试查询：种子、分数、自适应深度）带一键回答质量反馈条（驱动空闲反思）、**编织**（单条 + 会话批量）、**审计**。节点抽屉内置**遗忘**操作（`DELETE /v1/nodes/{id}` 打墓碑）。与 gRPC/MCP 同一个引擎、同一条写路径。REST 端点与 gRPC 契约一一对应，规范见 [docs/api/openapi.json](docs/api/openapi.json)。内置深色/浅色主题和中英文界面切换。
+七个视图：**总览**（统计卡片、最新记忆、活动流、张力分布直方图）、**记忆**（浏览/过滤，实时张力）、**图谱**（零依赖力导向记忆网络图——引擎核心叙事的可视化）、**共振**（调试查询：种子、分数、自适应深度）带一键回答质量反馈条（驱动空闲反思）、**编织**（单条 + 会话批量）、**审计**、**团队**（key 管理 + 成员活动）。节点抽屉内置**遗忘**操作（`DELETE /v1/nodes/{id}` 打墓碑）。与 gRPC/MCP 同一个引擎、同一条写路径。REST 端点与 gRPC 契约一一对应，规范见 [docs/api/openapi.json](docs/api/openapi.json)。内置深色/浅色主题和中英文界面切换。
 
 ## 多租户与鉴权
 
@@ -77,7 +77,9 @@ dsh plugin --profile web add <nylon/plugins/dsh-nylonme-memory>
 - 设 `NYLON_API_KEYS_FILE`（或内联 `NYLON_API_KEYS`）后启用鉴权：HTTP 请求带 `x-api-key` 头或 `Authorization: Bearer <key>`，gRPC 带 `x-api-key` metadata；
 - 首次启动会生成一把 admin key 并打印一次；之后用 `nylon-engine keys add/list/revoke` 给同事发 key（key 表热加载，无需重启）。
 
-审计事件流（L2.3）由 `NYLON_AUDIT` 开关控制，`GET /v1/audit` 查询谁在用、谁在刷。
+key 可以挂**成员别名**（`nylon-engine keys add --name alice`）：之后每条审计事件都记录 `actor=alice`，团队活动按人归因，而不是按匿名 key。管理员也可以用 REST 管理 key——`GET/POST /v1/keys`、`DELETE /v1/keys/{prefix}`（列表打码，完整 key 只在签发时返回一次）；控制台的**团队**视图把这套操作做成了签发/吊销按钮和成员活动面板。
+
+审计事件流（L2.3）由 `NYLON_AUDIT` 开关控制，`GET /v1/audit`（可加 `?actor=alice` 过滤）查询谁在用、谁在刷。
 
 ## Python SDK
 

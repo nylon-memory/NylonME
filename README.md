@@ -67,7 +67,7 @@ The engine binary also serves a zero-install web console and REST API (default `
 
 ![NylonME Console](docs/ui-console.png)
 
-Six views: **Overview** (stats, latest memories, activity stream, tension histogram), **Memories** (browse/filter with real-time tension), **Graph** (zero-dependency force-directed map of the memory web — the engine's core narrative made visible), **Resonate** (debug queries: seeds, scores, adaptive depth) with a one-click answer-quality feedback bar that feeds idle reflection, **Weave** (single + session batch), **Audit**. Node drawer includes a **Forget** action (tombstone via `DELETE /v1/nodes/{id}`). Same engine, same write path as gRPC/MCP. REST endpoints mirror the gRPC contract; spec: [docs/api/openapi.json](docs/api/openapi.json). Dark/light themes and an EN/中文 toggle are built in.
+Seven views: **Overview** (stats, latest memories, activity stream, tension histogram), **Memories** (browse/filter with real-time tension), **Graph** (zero-dependency force-directed map of the memory web — the engine's core narrative made visible), **Resonate** (debug queries: seeds, scores, adaptive depth) with a one-click answer-quality feedback bar that feeds idle reflection, **Weave** (single + session batch), **Audit**, and **Team** (key management + per-member activity). Node drawer includes a **Forget** action (tombstone via `DELETE /v1/nodes/{id}`). Same engine, same write path as gRPC/MCP. REST endpoints mirror the gRPC contract; spec: [docs/api/openapi.json](docs/api/openapi.json). Dark/light themes and an EN/中文 toggle are built in.
 
 ## Multi-tenancy & Auth
 
@@ -77,7 +77,9 @@ The engine supports tenant isolation (L2.1) and API-key auth (L2.2) with three t
 - Set `NYLON_API_KEYS_FILE` (or inline `NYLON_API_KEYS`) to enable auth: HTTP sends `x-api-key` header or `Authorization: Bearer <key>`, gRPC sends `x-api-key` metadata;
 - First boot mints one admin key and prints it once; then `nylon-engine keys add/list/revoke` issues keys to teammates (key table hot-reloads, no restart).
 
-An audit event stream (L2.3) is gated by `NYLON_AUDIT`; query `GET /v1/audit` to see who is using and who is hammering the engine.
+Keys can carry a **member alias** (`nylon-engine keys add --name alice`): every audit event then records `actor=alice`, so team activity is attributable per person rather than per anonymous key. Admins can also manage keys over REST — `GET/POST /v1/keys`, `DELETE /v1/keys/{prefix}` (masked in listings; the full key is returned exactly once at creation) — and the console's **Team** view wraps this with issue/revoke buttons and a per-member activity panel.
+
+An audit event stream (L2.3) is gated by `NYLON_AUDIT`; query `GET /v1/audit` (optionally `?actor=alice`) to see who is using and who is hammering the engine.
 
 ## Python SDK
 
