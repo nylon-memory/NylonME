@@ -94,6 +94,8 @@ NYLON_SERVER=http://127.0.0.1:50051 ./smoke_client
 # -> SMOKE_OK
 ```
 
+Upgrading from an older release? Binary swap, data stays — see [UPGRADE.md](UPGRADE.md).
+
 ## Your first memory (CLI)
 
 ```bash

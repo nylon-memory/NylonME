@@ -45,6 +45,8 @@ LongMemEval-S（100 实例切片，deepseek-v4-pro 作答）：证据召回 any-
 }
 ```
 
+> **从旧版升级？** 换二进制、不动数据目录——见[升级指南](docs/UPGRADE.md)（含"升级后崩了"的三大根因和五步清单）.
+
 Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。Agent 会获得三个工具：`memory_weave`（沉淀事实）、`memory_resonate`（回忆相关记忆）、`memory_get`（按 ID 读取）。各客户端的详细配置见 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
 
 多机共享一份记忆库时，可选**远程桥接模式**：设 `NYLON_SERVER=host:50051`（可选 `NYLON_API_KEY`），MCP 调用会转发到远端引擎，本机不再内嵌引擎。

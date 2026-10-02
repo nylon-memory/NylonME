@@ -45,6 +45,8 @@ Two design rules the experiments forced on us: the **understanding layer lives o
 }
 ```
 
+> **Upgrading from an older release?** Swap the binary, keep the data — see the [Upgrade Guide](docs/UPGRADE.md) (数据目录不动、五步清单、常见"升级后崩了"排查).
+
 Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your agent gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node). See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for per-client setup.
 
 To share one memory store across machines, use optional **remote bridge mode**: set `NYLON_SERVER=host:50051` (optionally `NYLON_API_KEY`); MCP calls are forwarded to the remote engine and no engine is embedded locally.
