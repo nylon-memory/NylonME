@@ -1,6 +1,6 @@
 # LoCoMo Benchmark — Method and Results
 
-Latest full run: **2026-09-23**, commit `e49ce38`. All numbers on the full
+Latest full run: **2026-10-01**, commit `db8ebb9`. All numbers on the full
 10-session LoCoMo corpus (1,536 answerable QA in 4 categories; 1,530 judged
 end-to-end).
 
@@ -8,18 +8,45 @@ end-to-end).
 
 | Metric | Value |
 |---|---|
-| Evidence recall@10 | **85.9%** |
-| End-to-end QA accuracy, paper protocol (Mem0 Appendix A wording) | **80.1%** |
-| End-to-end QA accuracy, strict protocol (semantic equivalence) | **74.1%** |
+| Evidence recall@10 | **86.0%** |
+| End-to-end QA accuracy, paper protocol (Mem0 Appendix A wording) | **82.9%** |
 
 Per-category (paper protocol J):
 
 | Category | recall@10 | J |
 |---|---|---|
-| 1 multi-hop | 82.3% (232/282) | 68.6% (192/280) |
-| 2 temporal | 88.8% (285/321) | 78.9% (250/317) |
-| 3 commonsense / open-domain | 58.7% (54/92) | 65.2% (60/92) |
-| 4 single-hop | 89.1% (749/841) | 86.1% (724/841) |
+| 1 multi-hop | 82.3% (232/282) | 74.6% (209/280) |
+| 2 temporal | 89.1% (286/321) | 81.1% (257/317) |
+| 3 commonsense / open-domain | 58.7% (54/92) | 60.9% (56/92) |
+| 4 single-hop | 89.1% (749/841) | 88.7% (746/841) |
+
+## Answer-context widening (2026-10-01, CTX_K=15)
+
+Same weave cache, same answering model (k3), same prompts as the 9/23
+baseline; the only variable is the number of activated nodes shown to the
+answering LLM (10 → 15). recall@10 reporting is untouched (86.0% vs 85.9%
+is the same retrieval caliber).
+
+| Category | Baseline J (9/23) | CTX_K=15 J | Delta |
+|---|---|---|---|
+| overall | 80.1% (1226/1530) | **82.9% (1268/1530)** | +2.8pp |
+| 1 multi-hop | 68.6% | 74.6% | +6.0 |
+| 2 temporal | 78.9% | 81.1% | +2.2 |
+| 3 commonsense | 65.2% | 60.9% | **−4.3** |
+| 4 single-hop | 86.1% | 88.7% | +2.6 |
+
+Question-level flips (QA-WRONG set difference): **+71 up / −31 down, net
++40**. Up-flips concentrate in cat4 (+34) and cat1 (+24) — enumeration
+and factoid questions whose evidence was crowded out of Top-10. The cat3
+regression (+1/−5) shows a wider context adds distractors for open-domain
+commonsense questions; type-adaptive context width (narrow for
+open-domain, wide for enumeration) is the follow-up. The same widening
+moved LongMemEval-S J 78.0% → 83.0% (paired +8/−3) — see
+LONGMEMEVAL_BENCHMARK.md.
+
+Note: this round used a single judge (paper protocol) to halve quota
+usage, so no strict-protocol figure is reported; the 9/23 strict figure
+was 74.1%.
 
 ## Protocol
 
@@ -32,8 +59,10 @@ Per-category (paper protocol J):
   (graph diffusion with tension decay, global activation budget) →
   query-vector rerank (`0.5 * resonance + 0.5 * cosine`) → seed hoisting
   (quota 10). Single-hop-style queries use adaptive depth 0 (no diffusion).
-- **Answering**: LLM (k3) answers from the retrieved Top-10 with an
-  anti-abstention, specificity-preferring prompt.
+- **Answering**: LLM (k3) answers from the retrieved activated nodes with
+  an anti-abstention, specificity-preferring prompt. Answer context width
+  is configurable (`NYLON_EVAL_CTX_K`, default 10); the headline number
+  uses 15 (see the widening section above).
 - **Judging**: two LLM judges per answer — paper protocol (generous,
   topic-overlap counts as correct, per Mem0 Appendix A) and a strict
   semantic-equivalence protocol. We report both; all A/B decisions use
@@ -80,4 +109,6 @@ Answer-side ablation (identical weave, 10-session e2e):
 The evaluation lives in `engine/crates/nylon-engine/tests/locomo_eval.rs`
 (ignored by default). Entry points: `NYLON_LOCOMO_PATH` (dataset),
 `NYLON_EVAL_E2E=1` (QA + judging), `NYLON_EVAL_STORE_DIR` (weave cache),
-`NYLON_EVAL_QA_PROMPT_V2=1` (anti-abstention answering).
+`NYLON_EVAL_QA_PROMPT_V2=1` (anti-abstention answering),
+`NYLON_EVAL_CTX_K` (answer-context width), `NYLON_EVAL_SINGLE_JUDGE`
+(skip the strict judge to halve quota usage).

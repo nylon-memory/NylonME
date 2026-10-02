@@ -21,9 +21,11 @@ LoCoMo evidence recall@10, full 10-session corpus (1536 answerable QA, lexical +
 | + async commonsense reflection (world-knowledge bridges) | 85.4% |
 | = re-baselined after write-side integrity fix (issue #1) | **85.9%** |
 
-Per-category recall (full corpus): multi-hop 82.3%, temporal 88.8%, commonsense 58.7%, single-hop 89.1%.
+Per-category recall (full corpus): multi-hop 82.3%, temporal 89.1%, commonsense 58.7%, single-hop 89.1%.
 
-End-to-end QA (LLM answers from the retrieved Top-10, judge-scored): paper protocol **80.1%** (Mem0 Appendix A wording), strict protocol **74.1%** — with an answer-side anti-abstention prompt (paired A/B on an identical weave: 76.4% → 80.1%; abstentions 163 → 76). Per-category J: multi-hop 68.6%, temporal 78.9%, commonsense 65.2%, single-hop 86.1%. Full method, per-category tables and variance notes in [docs/LOCOMO_BENCHMARK.md](docs/LOCOMO_BENCHMARK.md).
+End-to-end QA (LLM answers from the retrieved evidence, judge-scored): paper protocol **82.9%** (Mem0 Appendix A wording; same weave and answering model throughout: 76.4% → anti-abstention prompt 80.1% → widened answer context 82.9%, paired flips +71/−31). Per-category J: multi-hop 74.6%, temporal 81.1%, commonsense 60.9%, single-hop 88.7%. Full method, per-category tables and variance notes in [docs/LOCOMO_BENCHMARK.md](docs/LOCOMO_BENCHMARK.md).
+
+LongMemEval-S (100-instance slice, deepseek-v4-pro answering): evidence recall any-hit **99%**, end-to-end J **83.0%**. Widening the LLM answer context from Top-10 to Top-15 activated nodes (recall@10 reporting window untouched) moved J 78.0% → 83.0% with paired flips +8/−3 — the same mechanism later replicated on LoCoMo (+2.8pp). Details in [docs/LONGMEMEVAL_BENCHMARK.md](docs/LONGMEMEVAL_BENCHMARK.md).
 
 Two design rules the experiments forced on us: the **understanding layer lives on the write side** (the LLM is a compiler that turns raw events into retrievable structure; query-side LLM expansion measured net-zero), and **both layers must coexist** (abstract-layer-only retrieval drops the score to 67.3%).
 
@@ -203,7 +205,7 @@ NylonME/
 
 ## Roadmap
 
-Done: dual-layer write engine (WeaveSession), hybrid lexical+vector seeds, adaptive resonance depth, query-vector rerank, HNSW, RocksDB persistence, gRPC serving, LoCoMo recall 85.9% / QA 80.1%, REST/OpenAPI gateway + web console, Python SDK, LangChain/LlamaIndex integrations, tenant isolation (L2.1), API-key auth (L2.2), audit stream (L2.3), periodic snapshot + backup (L2.4), Docker one-command deployment, Helm chart, DSH plugin.
+Done: dual-layer write engine (WeaveSession), hybrid lexical+vector seeds, adaptive resonance depth, query-vector rerank, HNSW, RocksDB persistence, gRPC serving, LoCoMo recall 85.9% / QA 82.9% and LongMemEval-S recall 99% / QA 83.0%, REST/OpenAPI gateway + web console, Python SDK, LangChain/LlamaIndex integrations, tenant isolation (L2.1), API-key auth (L2.2), audit stream (L2.3), periodic snapshot + backup (L2.4), Docker one-command deployment, Helm chart, DSH plugin.
 Next: cross-encoder reranker, 1M-node memory profiling, paper & blog series.
 
 ## Contributing
