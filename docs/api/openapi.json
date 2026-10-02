@@ -507,6 +507,19 @@
             "type": "boolean",
             "description": "embedding channel enabled (NYLON_EMBED_URL)"
           },
+          "embedder_status": {
+            "type": "string",
+            "enum": ["disabled", "ok", "degraded"],
+            "description": "embedding channel health: disabled=not configured | ok=working | degraded=consecutive embed call failures (recall falls back to lexical/graph only)"
+          },
+          "embed_failures": {
+            "type": "integer",
+            "description": "consecutive embed call failures (0 = healthy)"
+          },
+          "embedder_last_error": {
+            "type": "string",
+            "description": "most recent embed error summary (omitted when healthy)"
+          },
           "llm": {
             "type": "boolean",
             "description": "LLM weave channel enabled (NYLON_LLM_URL)"

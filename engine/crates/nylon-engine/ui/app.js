@@ -50,6 +50,7 @@ const I18N = {
     "tip.hops": "max graph hops: default = adaptive; 0 = precise recall (no spread)",
     "tip.close": "close",
     embedOn: (d) => `embed ${d}d`, embedOff: "embed off",
+    embedDegraded: (d, n) => `embed ${d}d degraded ×${n}`,
     llmOn: "llm on", llmOff: "llm off",
     memTotal: (n) => `${n} nodes`,
     graphMeta: (s, tot, e) => `${s}/${tot} nodes · ${e} edges`,
@@ -115,6 +116,7 @@ const I18N = {
     "tip.hops": "最大图跳数：默认自适应；0 = 精准召回（不扩散）",
     "tip.close": "关闭",
     embedOn: (d) => `向量 ${d}d`, embedOff: "向量关闭",
+    embedDegraded: (d, n) => `向量 ${d}d 降级 ×${n}`,
     llmOn: "LLM 开", llmOff: "LLM 关",
     memTotal: (n) => `${n} 条记忆`,
     graphMeta: (s, tot, e) => `${s}/${tot} 节点 · ${e} 边`,
@@ -279,8 +281,13 @@ async function loadStats() {
     $("stat-nodes").textContent = s.nodes;
     $("stat-edges").textContent = s.edges;
     const em = $("stat-embed"), ll = $("stat-llm");
-    em.textContent = s.embedder ? t("embedOn")(s.embed_dims) : t("embedOff");
-    em.classList.toggle("on", !!s.embedder);
+    const degraded = s.embedder_status === "degraded";
+    em.textContent = !s.embedder ? t("embedOff")
+      : degraded ? t("embedDegraded")(s.embed_dims, s.embed_failures)
+      : t("embedOn")(s.embed_dims);
+    em.classList.toggle("on", !!s.embedder && !degraded);
+    em.classList.toggle("warn", degraded);
+    em.title = degraded && s.embedder_last_error ? s.embedder_last_error : em.title;
     ll.textContent = s.llm ? t("llmOn") : t("llmOff");
     ll.classList.toggle("on", !!s.llm);
   } catch (e) { /* engine unreachable — keep placeholders */ }
@@ -440,8 +447,10 @@ async function loadOverview() {
     $("ov-nodes").textContent = s.nodes;
     $("ov-edges").textContent = s.edges;
     const oe = $("ov-embed"), ol = $("ov-llm");
-    oe.textContent = s.embedder ? `${s.embed_dims}d` : "off";
+    const degraded = s.embedder_status === "degraded";
+    oe.textContent = !s.embedder ? "off" : degraded ? `${s.embed_dims}d!` : `${s.embed_dims}d`;
     oe.classList.toggle("off", !s.embedder);
+    oe.style.color = degraded ? "#f59e0b" : "";
     ol.textContent = s.llm ? "on" : "off";
     ol.classList.toggle("off", !s.llm);
   } catch (e) { /* keep placeholders */ }

@@ -301,12 +301,23 @@ pub struct EngineService {
     reflect_tx: Option<tokio::sync::mpsc::UnboundedSender<ReflectWork>>,
     /// 嵌入通道：None 时退回 Phase 1 行为（无向量写入、无向量种子）。
     embedder: Option<Arc<dyn Embedder>>,
+    /// 嵌入通道运行健康（issue #4）：连续失败计数 + 最近错误，
+    /// 让「配置了但端点挂了」在 stats 里可见，而不是静默退化成无区分度排序。
+    embed_health: Arc<EmbedHealth>,
     /// LLM 通道：None 时关闭编织分解与冲突检测。
     llm: Option<Arc<dyn ChatModel>>,
     /// API key 鉴权（L2.2）：None = 开放模式（单机默认）。
     auth: Option<Arc<ApiKeys>>,
     /// 审计事件流（L2.3）：None = 关闭（NYLON_AUDIT=off 或未挂接）。
     audit: Option<Audit>,
+}
+
+/// 嵌入通道运行健康（issue #4）。热路径（weave/resonate）逐次上报，
+/// 反思 worker 的嵌入失败暂不纳入（信号已被热路径覆盖）。
+#[derive(Default)]
+pub(crate) struct EmbedHealth {
+    consecutive_failures: std::sync::atomic::AtomicU32,
+    last_error: std::sync::Mutex<Option<String>>,
 }
 
 impl EngineService {
@@ -393,10 +404,72 @@ impl EngineService {
         EngineService {
             inner,
             embedder,
+            embed_health: Arc::new(EmbedHealth::default()),
             llm,
             reflect_tx,
             auth: None,
             audit: None,
+        }
+    }
+
+    /// 记录一次嵌入调用成功（issue #4）：清零连续失败计数。
+    pub(crate) fn note_embed_ok(&self) {
+        self.embed_health
+            .consecutive_failures
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut slot) = self.embed_health.last_error.lock() {
+            *slot = None;
+        }
+    }
+
+    /// 记录一次嵌入调用失败（issue #4）：计数 + 最近错误，首次与每 10 次告警。
+    pub(crate) fn note_embed_failure(&self, err: &str) {
+        let n = self
+            .embed_health
+            .consecutive_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if let Ok(mut slot) = self.embed_health.last_error.lock() {
+            *slot = Some(err.chars().take(300).collect());
+        }
+        if n == 1 || n.is_multiple_of(10) {
+            eprintln!(
+                "[embed] 嵌入调用连续失败 {n} 次：{err} —— 语义召回已退化（stats.embedder_status=degraded）"
+            );
+        }
+    }
+
+    /// 启动探测（serve 模式，issue #4）：确认已配置的嵌入端点真的可用；
+    /// 未配置/失败都打出醒目提示而不是静默退化，结果计入健康状态。
+    pub async fn probe_embedder(&self) {
+        let Some(emb) = &self.embedder else {
+            eprintln!(
+                "[warn] 未配置 NYLON_EMBED_URL：语义召回关闭，resonate 分数无区分度（stats.embedder_status=disabled）。配置嵌入端点可开启语义召回（见 docs/GETTING_STARTED.md）"
+            );
+            return;
+        };
+        let probe = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            emb.embed(&["nylon startup probe".to_string()]),
+        )
+        .await;
+        match probe {
+            Ok(Ok(_)) => {
+                self.note_embed_ok();
+                println!("嵌入通道已启用 (NYLON_EMBED_URL，启动探测成功)");
+            }
+            Ok(Err(e)) => {
+                self.note_embed_failure(&e.to_string());
+                eprintln!(
+                    "[warn] 嵌入端点已配置但启动探测失败：{e} —— 写入会报「嵌入失败」、共振退化为纯词面（stats.embedder_status=degraded）。请检查嵌入服务是否已拉起"
+                );
+            }
+            Err(_) => {
+                self.note_embed_failure("启动探测超时（5s）");
+                eprintln!(
+                    "[warn] 嵌入端点启动探测超时（5s）——写入会报「嵌入失败」、共振退化为纯词面（stats.embedder_status=degraded）。请检查嵌入服务是否已拉起"
+                );
+            }
         }
     }
 
@@ -472,6 +545,14 @@ pub struct EngineStats {
     pub edges: usize,
     pub embed_dims: usize,
     pub embedder: bool,
+    /// 嵌入通道健康（issue #4）：disabled=未配置 | ok=工作正常 | degraded=连续失败中。
+    /// embedder=true 只代表配置了 NYLON_EMBED_URL，不代表端点可用。
+    pub embedder_status: String,
+    /// 嵌入调用连续失败次数（0 = 健康）。
+    pub embed_failures: u32,
+    /// 最近一次嵌入错误摘要（健康时省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedder_last_error: Option<String>,
     pub llm: bool,
 }
 
@@ -543,11 +624,33 @@ impl EngineService {
             .inner
             .lock()
             .map_err(|_| Status::internal("state lock poisoned"))?;
+        let (embedder_status, embed_failures, embedder_last_error) = if self.embedder.is_none() {
+            ("disabled".to_string(), 0, None)
+        } else {
+            let fails = self
+                .embed_health
+                .consecutive_failures
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if fails == 0 {
+                ("ok".to_string(), 0, None)
+            } else {
+                let last = self
+                    .embed_health
+                    .last_error
+                    .lock()
+                    .ok()
+                    .and_then(|e| e.clone());
+                ("degraded".to_string(), fails, last)
+            }
+        };
         Ok(EngineStats {
             nodes: inner.store.graph().node_count(),
             edges: inner.store.graph().edges().len(),
             embed_dims: inner.index.dims(),
             embedder: self.embedder.is_some(),
+            embedder_status,
+            embed_failures,
+            embedder_last_error,
             llm: self.llm.is_some(),
         })
     }
@@ -786,9 +889,16 @@ impl EngineService {
             };
         // Embed the decomposed fact before moving it into the node
         let embedding = if let Some(emb) = &self.embedder {
-            match emb.embed(std::slice::from_ref(&fact)).await {
-                Ok(mut v) => v.pop(),
-                Err(e) => return Err(Status::internal(format!("嵌入失败: {e}"))),
+            let res = emb.embed(std::slice::from_ref(&fact)).await;
+            match res {
+                Ok(mut v) => {
+                    self.note_embed_ok();
+                    v.pop()
+                }
+                Err(e) => {
+                    self.note_embed_failure(&e.to_string());
+                    return Err(Status::internal(format!("嵌入失败: {e}")));
+                }
             }
         } else {
             None
@@ -1974,6 +2084,7 @@ impl MemoryEngine for EngineService {
             if let (Some(emb), false) = (&self.embedder, query.is_empty()) {
                 match emb.embed(std::slice::from_ref(&r.query)).await {
                     Ok(v) => {
+                        self.note_embed_ok();
                         qvec = v.first().cloned();
                         let inner = self
                             .inner
@@ -1995,7 +2106,11 @@ impl MemoryEngine for EngineService {
                             .take(max_seeds())
                             .collect()
                     }
-                    Err(_) => Vec::new(), // 嵌入服务故障时降级为纯词面
+                    Err(e) => {
+                        // 嵌入服务故障时降级为纯词面——故障计入健康状态（issue #4），不再无声
+                        self.note_embed_failure(&e.to_string());
+                        Vec::new()
+                    }
                 }
             } else {
                 Vec::new()
@@ -2747,6 +2862,77 @@ mod tests {
         let r = extract_session_facts(&AlwaysFail, &lines).await;
         assert!(r.facts.is_empty());
         assert!(!r.all_ok);
+    }
+
+    /// issue #4：stats 必须区分嵌入通道的 disabled / ok / degraded 三态。
+    #[tokio::test]
+    async fn stats_reports_embedder_health_states() {
+        // disabled：未配置 embedder
+        let dir = tempfile::tempdir().unwrap();
+        let store = PersistentGraph::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let svc = EngineService::new(store, 64, None, None);
+        let s = svc.stats().unwrap();
+        assert!(!s.embedder);
+        assert_eq!(s.embedder_status, "disabled");
+        assert_eq!(s.embed_failures, 0);
+
+        // ok：embedder 在位且无失败
+        let (svc, _emb) = svc_with_embed(64);
+        let s = svc.stats().unwrap();
+        assert!(s.embedder);
+        assert_eq!(s.embedder_status, "ok");
+
+        // degraded：连续失败被记录，含最近错误摘要
+        svc.note_embed_failure("endpoint down");
+        let s = svc.stats().unwrap();
+        assert_eq!(s.embedder_status, "degraded");
+        assert_eq!(s.embed_failures, 1);
+        assert_eq!(s.embedder_last_error.as_deref(), Some("endpoint down"));
+
+        // 成功一次即恢复 ok
+        svc.note_embed_ok();
+        let s = svc.stats().unwrap();
+        assert_eq!(s.embedder_status, "ok");
+        assert_eq!(s.embedder_last_error, None);
+    }
+
+    /// issue #4：resonate 的嵌入失败不再静默——降级为纯词面的同时计入健康状态。
+    #[tokio::test]
+    async fn resonate_embed_failure_marks_degraded() {
+        struct FailingEmbedder;
+        #[async_trait::async_trait]
+        impl Embedder for FailingEmbedder {
+            async fn embed(
+                &self,
+                _texts: &[String],
+            ) -> Result<Vec<Vec<f32>>, nylon_embed::EmbedError> {
+                Err(nylon_embed::EmbedError("endpoint down".into()))
+            }
+            fn dims(&self) -> usize {
+                64
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let store = PersistentGraph::open(dir.path()).unwrap();
+        std::mem::forget(dir);
+        let svc = EngineService::new(store, 64, Some(Arc::new(FailingEmbedder)), None);
+        assert_eq!(svc.stats().unwrap().embedder_status, "ok"); // 尚未有调用，配置≠故障
+        let _ = svc
+            .resonate(Request::new(ResonateRequest {
+                tenant_id: "t1".into(),
+                owner_id: "alice".into(),
+                query: "咖啡".into(),
+                context: None,
+                budget: 8,
+                top_k: 0,
+            }))
+            .await
+            .unwrap();
+        let s = svc.stats().unwrap();
+        assert_eq!(s.embedder_status, "degraded");
+        assert!(s.embed_failures >= 1);
+        assert!(s.embedder_last_error.unwrap().contains("endpoint down"));
     }
 
     /// L2.1：向量检索 Search 不得跨租户（历史漏洞：HNSW 全局索引未过滤）。

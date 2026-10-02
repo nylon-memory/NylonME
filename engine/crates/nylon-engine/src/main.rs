@@ -123,9 +123,6 @@ fn main() {
             let store = PersistentGraph::open(&data).expect("open persistent store");
             let llm = nylon_llm::llm_from_env();
             let embedder = nylon_embed::embedder_from_env(dims);
-            if embedder.is_some() {
-                println!("嵌入通道已启用 (NYLON_EMBED_URL)");
-            }
             let keys = auth::ApiKeys::from_env();
             if let Some(k) = &keys {
                 println!("API key 鉴权已启用（{} 把 key，L2.2）", k.len());
@@ -133,6 +130,8 @@ fn main() {
             let svc = service::EngineService::new(store, dims, embedder, llm)
                 .with_auth(keys.clone())
                 .with_audit(audit::Audit::start(std::path::Path::new(&data)));
+            // 嵌入通道启动探测（issue #4）：未配置/端点不可达都醒目提示，不再静默退化
+            svc.probe_embedder().await;
             let sock = addr.parse().expect("invalid listen addr");
             // HTTP 网关（REST + 社区版 Web UI）默认 127.0.0.1:50052，NYLON_HTTP_ADDR=off 关闭
             let http_addr =

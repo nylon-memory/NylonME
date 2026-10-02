@@ -75,6 +75,14 @@ NYLON_EMBED_URL=http://localhost:11434 NYLON_EMBED_MODEL=bge-m3 NYLON_EMBED_DIMS
 > `http://127.0.0.1:11434` through the proxy and ollama returns `502 Bad Gateway`.
 > Use `http://localhost:11434` instead — proxy bypass lists match `localhost`.
 
+At startup the engine **probes the embedding endpoint** once: on failure it prints a
+`[warn]` and keeps running (writes then fail with `嵌入失败`, recall degrades to
+lexical/graph only). If `NYLON_EMBED_URL` is not set at all, a `[warn]` tells you
+semantic recall is off. You can check the channel health at any time via
+`GET /v1/stats` → `embedder_status`: `ok` / `degraded` (see `embed_failures` +
+`embedder_last_error`) / `disabled`. A `degraded` or `disabled` state makes
+resonate scores undifferentiated — every candidate ranks alike.
+
 Optional understanding layer (session-level fact weaving with any OpenAI-compatible chat model):
 
 ```bash

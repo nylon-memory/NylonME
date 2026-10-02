@@ -39,6 +39,7 @@ body {
 }
 .chip b { color: var(--text); font-family: var(--mono); }
 .chip.on { color: var(--accent); border-color: var(--accent-dim); }
+.chip.warn { color: #f59e0b; border-color: #f59e0b66; background: #f59e0b14; }
 .owner-box { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .owner-box input { width: 140px; }
 .owner-box input#apikey { width: 120px; }
