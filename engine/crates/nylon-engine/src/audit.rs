@@ -20,6 +20,10 @@ pub struct AuditEvent {
     pub tenant: String,
     pub owner: String,
     pub detail: String,
+    /// 操作者归因（Team 功能）：发起请求的 key 别名；开放模式或未知为 ""。
+    /// serde(default) 保证旧 JSONL 行可解析。
+    #[serde(default)]
+    pub actor: String,
 }
 
 /// 审计汇：emit 非阻塞（channel 入队即返），查询走内存环形缓冲。
@@ -86,7 +90,7 @@ impl Audit {
     }
 
     /// 记录一条事件（非阻塞；后台任务落盘 + 入环）。
-    pub fn emit(&self, action: &str, tenant: &str, owner: &str, detail: String) {
+    pub fn emit(&self, action: &str, tenant: &str, owner: &str, detail: String, actor: &str) {
         let ev = AuditEvent {
             ts: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -96,17 +100,19 @@ impl Audit {
             tenant: tenant.to_string(),
             owner: owner.to_string(),
             detail,
+            actor: actor.to_string(),
         };
         // 接收端关闭（引擎停机中）时静默丢弃
         let _ = self.tx.send(ev);
     }
 
-    /// 查询最近事件（最新在前）。tenant/owner/action 为可选精确过滤。
+    /// 查询最近事件（最新在前）。tenant/owner/action/actor 为可选精确过滤。
     pub fn query(
         &self,
         tenant: Option<&str>,
         owner: Option<&str>,
         action: Option<&str>,
+        actor: Option<&str>,
         limit: usize,
     ) -> Vec<AuditEvent> {
         let g = self.recent.lock().unwrap_or_else(|p| p.into_inner());
@@ -115,6 +121,7 @@ impl Audit {
             .filter(|e| tenant.is_none_or(|t| e.tenant == t))
             .filter(|e| owner.is_none_or(|o| e.owner == o))
             .filter(|e| action.is_none_or(|a| e.action == a))
+            .filter(|e| actor.is_none_or(|a| e.actor == a))
             .take(limit)
             .cloned()
             .collect()
@@ -166,22 +173,31 @@ mod tests {
     async fn emit_and_query_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let audit = Audit::start(dir.path()).unwrap();
-        audit.emit("weave", "t1", "alice", "node=3 linked=2".into());
-        audit.emit("resonate", "t1", "bob", "hits=5".into());
-        audit.emit("weave", "t2", "carol", "node=1".into());
+        audit.emit(
+            "weave",
+            "t1",
+            "alice",
+            "node=3 linked=2".into(),
+            "key-alice",
+        );
+        audit.emit("resonate", "t1", "bob", "hits=5".into(), "key-bob");
+        audit.emit("weave", "t2", "carol", "node=1".into(), "");
         // 等后台任务消费
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let all = audit.query(None, None, None, 10);
+        let all = audit.query(None, None, None, None, 10);
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].action, "weave"); // 最新在前
         assert_eq!(all[0].tenant, "t2");
+        assert_eq!(all[2].actor, "key-alice");
 
-        let t1 = audit.query(Some("t1"), None, None, 10);
+        let t1 = audit.query(Some("t1"), None, None, None, 10);
         assert_eq!(t1.len(), 2);
-        let alice_weaves = audit.query(Some("t1"), Some("alice"), Some("weave"), 10);
+        let alice_weaves = audit.query(Some("t1"), Some("alice"), Some("weave"), None, 10);
         assert_eq!(alice_weaves.len(), 1);
         assert_eq!(alice_weaves[0].detail, "node=3 linked=2");
+        let by_actor = audit.query(None, None, None, Some("key-bob"), 10);
+        assert_eq!(by_actor.len(), 1);
 
         // JSONL 已落盘
         let raw = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
@@ -193,13 +209,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let audit = Audit::start(dir.path()).unwrap();
-            audit.emit("weave", "t1", "alice", "第一次运行".into());
+            audit.emit("weave", "t1", "alice", "第一次运行".into(), "key-alice");
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         } // 模拟进程退出
         let audit = Audit::start(dir.path()).unwrap();
-        let all = audit.query(None, None, None, 10);
+        let all = audit.query(None, None, None, None, 10);
         assert_eq!(all.len(), 1, "重启后应从 JSONL 预载历史事件");
         assert_eq!(all[0].detail, "第一次运行");
+        assert_eq!(all[0].actor, "key-alice", "actor 应随 JSONL 持久化预载");
     }
 
     #[tokio::test]

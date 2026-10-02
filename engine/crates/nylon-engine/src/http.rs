@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -124,6 +124,7 @@ struct AuditQuery {
     #[serde(alias = "owner_id")]
     owner: Option<String>,
     action: Option<String>,
+    actor: Option<String>,
     limit: Option<usize>,
 }
 
@@ -147,6 +148,7 @@ async fn audit_events(
         tenant.as_deref(),
         q.owner.as_deref(),
         q.action.as_deref(),
+        q.actor.as_deref(),
         limit,
     );
     Ok(Json(serde_json::json!({ "events": events })))
@@ -158,9 +160,117 @@ async fn checkpoint_now(
     State(svc): State<EngineService>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
-    svc.checkpoint().map_err(map_status)?;
+    let grant = http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
+    let actor = grant.and_then(|g| g.name).unwrap_or_default();
+    svc.checkpoint(&actor).map_err(map_status)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Team key 管理（admin 专属）：仅在文件源 key 表（NYLON_API_KEYS_FILE）下可用；
+/// 内联 JSON 配置或开放模式返回 503 并提示迁移方式。
+fn keys_file(svc: &EngineService) -> Result<std::path::PathBuf, ApiError> {
+    let Some(keys) = svc.auth() else {
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "鉴权未启用（开放模式没有 key 表）".into(),
+        ));
+    };
+    keys.file_path().ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "key 表为内联 JSON（NYLON_API_KEYS），不支持在线管理；请改用 NYLON_API_KEYS_FILE 文件配置"
+                .into(),
+        )
+    })
+}
+
+fn internal_err(e: String) -> ApiError {
+    ApiError(StatusCode::INTERNAL_SERVER_ERROR, e)
+}
+
+/// 列出 key 表（打码）：admin 档位。
+async fn keys_list_http(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
+    let path = keys_file(&svc)?;
+    let list = crate::auth::keys_list(&path).map_err(internal_err)?;
+    let items: Vec<_> = list
+        .into_iter()
+        .map(|(key, tenant, scope, name)| {
+            serde_json::json!({"key": key, "tenant": tenant, "scope": scope, "name": name})
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "keys": items })))
+}
+
+#[derive(serde::Deserialize)]
+struct KeyAddBody {
+    tenant: String,
+    scope: String,
+    name: Option<String>,
+}
+
+/// 签发新 key：admin 档位。完整 key 只在响应里出现这一次（与 CLI 同一语义）。
+async fn keys_add_http(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+    Json(b): Json<KeyAddBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    let grant = http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
+    if b.tenant.trim().is_empty() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "tenant 不能为空".into()));
+    }
+    let path = keys_file(&svc)?;
+    let key = crate::auth::keys_add(&path, &b.tenant, &b.scope, None, b.name.as_deref())
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    let actor = grant.and_then(|g| g.name).unwrap_or_default();
+    if let Some(a) = svc.audit() {
+        a.emit(
+            "keys_add",
+            &b.tenant,
+            "",
+            format!(
+                "scope={} name={} key={}…",
+                b.scope,
+                b.name.clone().unwrap_or_default(),
+                &key[..key.len().min(12)]
+            ),
+            &actor,
+        );
+    }
+    Ok(Json(serde_json::json!({
+        "key": key,
+        "tenant": b.tenant,
+        "scope": b.scope,
+        "name": b.name.unwrap_or_default(),
+    })))
+}
+
+/// 吊销 key（完整 key 或唯一前缀）：admin 档位。响应里只回打码前缀。
+async fn keys_revoke_http(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+    Path(prefix): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let grant = http_authorize(svc.auth(), &headers, Scope::Admin, None).map_err(map_status)?;
+    let path = keys_file(&svc)?;
+    let doomed = crate::auth::keys_revoke(&path, &prefix)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    let actor = grant.and_then(|g| g.name).unwrap_or_default();
+    if let Some(a) = svc.audit() {
+        a.emit(
+            "keys_revoke",
+            "",
+            "",
+            format!("key={}…", &doomed[..doomed.len().min(12)]),
+            &actor,
+        );
+    }
+    Ok(Json(
+        serde_json::json!({ "revoked": format!("{}…", &doomed[..doomed.len().min(12)]) }),
+    ))
 }
 
 /// 把 HTTP 侧已验证的 grant 透传给 service handler（与 gRPC 拦截器同一条比对路径）。
@@ -372,10 +482,15 @@ async fn delete_node(
     Query(q): Query<ListQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let tenant = q.tenant.clone().unwrap_or_else(|| DEFAULT_TENANT.into());
-    http_authorize(svc.auth(), &headers, Scope::Write, Some(&tenant)).map_err(map_status)?;
+    let grant =
+        http_authorize(svc.auth(), &headers, Scope::Write, Some(&tenant)).map_err(map_status)?;
+    let actor = grant.and_then(|g| g.name).unwrap_or_default();
     let local = u32::try_from(id)
         .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "node_id 超出局部 ID 范围".into()))?;
-    let deleted = svc.remove_node(&tenant, local).await.map_err(map_status)?;
+    let deleted = svc
+        .remove_node(&tenant, local, &actor)
+        .await
+        .map_err(map_status)?;
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
@@ -555,6 +670,8 @@ pub fn router(svc: EngineService) -> Router {
         .route("/v1/nodes/{id}", get(get_node).delete(delete_node))
         .route("/v1/graph", get(graph_view))
         .route("/v1/audit", get(audit_events))
+        .route("/v1/keys", get(keys_list_http).post(keys_add_http))
+        .route("/v1/keys/{prefix}", delete(keys_revoke_http))
         .route("/v1/checkpoint", post(checkpoint_now))
         .route("/v1/weave", post(weave))
         .route("/v1/weave_session", post(weave_session))

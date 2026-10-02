@@ -38,7 +38,7 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
 /// `nylon-engine keys` —— key 表离线管理（新增/列出/吊销）。
 /// 引擎开了鉴权且 key 表来自文件时热加载生效，无需重启服务。
 ///
-///   keys add [--tenant T] [--scope read|write|admin] [--key <显式key>] [--file 路径]
+///   keys add [--tenant T] [--scope read|write|admin] [--name 成员别名] [--key <显式key>] [--file 路径]
 ///   keys list [--file 路径]
 ///   keys revoke <完整key或唯一前缀> [--file 路径]
 ///
@@ -62,9 +62,11 @@ fn keys_cli(args: &[String]) {
         Some("add") => {
             let tenant = opt(args, "--tenant").unwrap_or_else(|| "default".into());
             let scope = opt(args, "--scope").unwrap_or_else(|| "write".into());
-            match auth::keys_add(&file, &tenant, &scope, opt(args, "--key")) {
+            let name = opt(args, "--name");
+            match auth::keys_add(&file, &tenant, &scope, opt(args, "--key"), name.as_deref()) {
                 Ok(key) => println!(
-                    "已签发（完整 key 只显示这一次）：\n  {key}\n  tenant={tenant} scope={scope}\n  已写入 {}（引擎热加载，立即生效）",
+                    "已签发（完整 key 只显示这一次）：\n  {key}\n  tenant={tenant} scope={scope} name={}\n  已写入 {}（引擎热加载，立即生效）",
+                    name.clone().unwrap_or_default(),
                     file.display()
                 ),
                 Err(e) => die(e),
@@ -72,9 +74,9 @@ fn keys_cli(args: &[String]) {
         }
         Some("list") => match auth::keys_list(&file) {
             Ok(rows) => {
-                println!("{:<14} {:<12} {:<6}", "key", "tenant", "scope");
-                for (k, t, s) in rows {
-                    println!("{k:<14} {t:<12} {s:<6}");
+                println!("{:<14} {:<12} {:<6} name", "key", "tenant", "scope");
+                for (k, t, s, n) in rows {
+                    println!("{k:<14} {t:<12} {s:<6} {n}");
                 }
             }
             Err(e) => die(e),
@@ -90,7 +92,7 @@ fn keys_cli(args: &[String]) {
         }
         _ => {
             eprintln!(
-                "用法:\n  nylon-engine keys add [--tenant T] [--scope read|write|admin] [--key K] [--file F]\n  nylon-engine keys list [--file F]\n  nylon-engine keys revoke <key前缀> [--file F]"
+                "用法:\n  nylon-engine keys add [--tenant T] [--scope read|write|admin] [--name 别名] [--key K] [--file F]\n  nylon-engine keys list [--file F]\n  nylon-engine keys revoke <key前缀> [--file F]"
             );
             std::process::exit(2);
         }
@@ -147,7 +149,7 @@ fn main() {
                 tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(ckpt_secs)).await;
-                        match svc_ckpt.checkpoint() {
+                        match svc_ckpt.checkpoint("") {
                             Ok(()) => println!("[checkpoint] 快照已落盘，WAL 已截断"),
                             Err(e) => eprintln!("[checkpoint] 失败: {e}"),
                         }

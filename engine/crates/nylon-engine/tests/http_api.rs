@@ -66,6 +66,92 @@ async fn rest_feedback_recorded() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
+/// Team key 管理 REST：签发/列出（打码+别名）/吊销全流程 + 鉴权与开放模式边界。
+#[tokio::test]
+async fn rest_keys_team_management() {
+    let dir = tempfile::tempdir().unwrap();
+    let keys_path = dir.path().join("api-keys.json");
+    let keys = std::sync::Arc::new(auth::ApiKeys::load_or_bootstrap(&keys_path).unwrap());
+    let raw = std::fs::read_to_string(&keys_path).unwrap();
+    let admin_key = serde_json::from_str::<Value>(&raw).unwrap()[0]["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let svc = test_svc(dir.path()).with_auth(Some(keys.clone()));
+    let app = http::router(svc);
+
+    // 无 key -> 401
+    let (s, _b) = call(&app, Request::get("/v1/keys").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    // admin 列出：仅 bootstrap 的 admin key，打码显示
+    let (s, b) = call(
+        &app,
+        Request::get("/v1/keys")
+            .header("x-api-key", &admin_key)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["keys"].as_array().unwrap().len(), 1);
+    assert!(b["keys"][0]["key"].as_str().unwrap().ends_with('…'));
+
+    // 签发带别名的成员 key：完整 key 只在响应出现
+    let (s, b) = call(
+        &app,
+        Request::post("/v1/keys")
+            .header("content-type", "application/json")
+            .header("x-api-key", &admin_key)
+            .body(Body::from(
+                json!({"tenant": "acme", "scope": "write", "name": "alice"}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    let alice_key = b["key"].as_str().unwrap().to_string();
+    assert!(!alice_key.is_empty());
+    assert_eq!(b["name"], "alice");
+    // 落盘 + 热加载：新 key 立即可认证且带别名
+    let grant = keys.authenticate(&alice_key).expect("新 key 应立即可用");
+    assert_eq!(grant.name.as_deref(), Some("alice"));
+    assert_eq!(grant.tenant, "acme");
+
+    // 列出含别名
+    let (s, b) = call(
+        &app,
+        Request::get("/v1/keys")
+            .header("x-api-key", &admin_key)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let rows = b["keys"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r["name"] == "alice"));
+
+    // 前缀吊销
+    let prefix = &alice_key[..12];
+    let (s, b) = call(
+        &app,
+        Request::delete(format!("/v1/keys/{prefix}"))
+            .header("x-api-key", &admin_key)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert!(keys.authenticate(&alice_key).is_none());
+
+    // 开放模式（无鉴权）：key 管理不可用
+    let dir2 = tempfile::tempdir().unwrap();
+    let app2 = http::router(test_svc(dir2.path()));
+    let (s, _b) = call(&app2, Request::get("/v1/keys").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+}
+
 /// weave_session：无 LLM 时抽象层状态应为 disabled（issue #1 的可观测性字段）。
 #[tokio::test]
 async fn rest_weave_session_abstract_status_disabled_without_llm() {

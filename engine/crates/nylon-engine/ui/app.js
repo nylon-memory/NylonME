@@ -10,6 +10,23 @@ const I18N = {
     "tab.overview": "Overview", "tab.memories": "Memories", "tab.graph": "Graph",
     "tab.resonate": "Resonate", "tab.weave": "Weave",
     "tab.audit": "Audit",
+    "tab.team": "Team",
+    "team.keys": "Team keys",
+    "team.issue": "Issue a key",
+    "team.activity": "Member activity (recent)",
+    "team.empty": "key management unavailable (open mode, or inline NYLON_API_KEYS config — switch to NYLON_API_KEYS_FILE)",
+    "team.newKeyHint": "full key shown ONCE — copy it now:",
+    "team.copy": "copy",
+    "team.copied": "copied",
+    "team.revokeConfirm": (k) => `Revoke key ${k}? It stops working immediately (hot reload).`,
+    "team.revoked": (k) => `revoked ${k}`,
+    "team.issued": "key issued",
+    "team.noActivity": "no attributed activity yet — name your keys to see who did what",
+    "th.key": "Key", "th.name": "Name", "th.scope": "Scope", "th.actor": "Actor",
+    "ph.teamName": "member name — e.g. alice",
+    "ph.teamTenant": "tenant (memory space)",
+    "tip.teamScope": "read = query only · write = + weave · admin = + manage keys / wildcard tenant",
+    "btn.issueKey": "Issue",
     "ov.nodes": "memory nodes", "ov.edges": "graph edges",
     "ov.embed": "embedding channel", "ov.llm": "LLM weave channel",
     "ov.recent": "Latest memories", "ov.activity": "Recent activity", "ov.tension": "Tension distribution",
@@ -76,6 +93,23 @@ const I18N = {
     "tab.overview": "总览", "tab.memories": "记忆", "tab.graph": "图谱",
     "tab.resonate": "共振", "tab.weave": "编织",
     "tab.audit": "审计",
+    "tab.team": "团队",
+    "team.keys": "团队 key",
+    "team.issue": "签发新 key",
+    "team.activity": "成员活动（最近）",
+    "team.empty": "key 管理不可用（开放模式，或 key 表是内联 NYLON_API_KEYS 配置——请改用 NYLON_API_KEYS_FILE 文件）",
+    "team.newKeyHint": "完整 key 只显示这一次，请立即复制：",
+    "team.copy": "复制",
+    "team.copied": "已复制",
+    "team.revokeConfirm": (k) => `吊销 key ${k}？热加载立即生效，不可恢复。`,
+    "team.revoked": (k) => `已吊销 ${k}`,
+    "team.issued": "已签发",
+    "team.noActivity": "暂无归因活动——给 key 起名字后就能看到谁做了什么",
+    "th.key": "Key", "th.name": "别名", "th.scope": "档位", "th.actor": "操作者",
+    "ph.teamName": "成员别名——如 alice",
+    "ph.teamTenant": "租户（记忆空间）",
+    "tip.teamScope": "read=只读查询 · write=+写入编织 · admin=+管理 key/通配租户",
+    "btn.issueKey": "签发",
     "ov.nodes": "记忆节点", "ov.edges": "图边",
     "ov.embed": "向量通道", "ov.llm": "LLM 编织通道",
     "ov.recent": "最新记忆", "ov.activity": "最近活动", "ov.tension": "张力分布",
@@ -247,6 +281,7 @@ document.querySelectorAll(".tab").forEach((b) =>
     document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === b));
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + b.dataset.view));
     if (b.dataset.view === "audit") loadAudit();
+    if (b.dataset.view === "team") loadTeam();
     if (b.dataset.view === "overview") loadOverview();
     if (b.dataset.view === "graph") loadGraph();
     else stopSim();
@@ -265,6 +300,7 @@ async function loadAudit() {
         <td><span class="rel-chip${e.action === "denied" ? " denied" : ""}">${esc(e.action)}</span></td>
         <td class="mono">${esc(e.tenant)}</td>
         <td class="mono">${esc(e.owner)}</td>
+        <td class="mono">${esc(e.actor || "")}</td>
         <td class="fact-cell" title="${esc(e.detail)}">${esc(e.detail)}</td>
       </tr>`).join("");
     $("audit-empty").hidden = rows.length > 0;
@@ -273,6 +309,87 @@ async function loadAudit() {
 }
 $("audit-refresh").addEventListener("click", loadAudit);
 $("audit-action").addEventListener("change", loadAudit);
+
+/* ---------- team（key 管理 + 成员活动） ---------- */
+async function loadTeam() {
+  try {
+    const d = await api("/v1/keys");
+    const rows = d.keys || [];
+    $("team-empty").hidden = true;
+    $("team-rows").innerHTML = rows.map((k) => {
+      const prefix = k.key.replace(/…$/, "");
+      return `
+      <tr>
+        <td class="mono">${esc(k.key)}</td>
+        <td>${esc(k.name || "–")}</td>
+        <td class="mono">${esc(k.tenant)}</td>
+        <td><span class="rel-chip">${esc(k.scope)}</span></td>
+        <td><button class="btn danger team-revoke" data-prefix="${esc(prefix)}" data-i18n-title="tip.delete" title="revoke">×</button></td>
+      </tr>`;
+    }).join("");
+    document.querySelectorAll(".team-revoke").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        const p = btn.dataset.prefix;
+        if (!confirm(t("team.revokeConfirm")(p + "…"))) return;
+        try {
+          await api(`/v1/keys/${encodeURIComponent(p)}`, undefined, "DELETE");
+          toast(t("team.revoked")(p + "…"));
+          loadTeam();
+        } catch (e) { toast(e.message); }
+      })
+    );
+  } catch (e) {
+    $("team-rows").innerHTML = "";
+    const empty = $("team-empty");
+    empty.hidden = false;
+    empty.textContent = e.message;
+  }
+  // 成员活动：审计事件按 actor 聚合
+  try {
+    const d = await api("/v1/audit?limit=300");
+    const byActor = {};
+    (d.events || []).forEach((e) => {
+      if (!e.actor) return;
+      byActor[e.actor] = byActor[e.actor] || { total: 0, last: 0, actions: {} };
+      const a = byActor[e.actor];
+      a.total += 1;
+      a.last = Math.max(a.last, e.ts);
+      a.actions[e.action] = (a.actions[e.action] || 0) + 1;
+    });
+    const names = Object.keys(byActor).sort((x, y) => byActor[y].total - byActor[x].total);
+    $("team-activity").innerHTML = names.length
+      ? names.map((n) => {
+          const a = byActor[n];
+          const top = Object.entries(a.actions).sort((p, q) => q[1] - p[1]).slice(0, 3)
+            .map(([act, c]) => `${esc(act)}×${c}`).join(" · ");
+          return `<div class="ov-item"><b>${esc(n)}</b> <span class="muted">${a.total} ops · ${top} · ${timeAgo(a.last)}</span></div>`;
+        }).join("")
+      : `<div class="muted">${esc(t("team.noActivity"))}</div>`;
+  } catch (e) { /* 审计不可用时静默（开放模式也无妨） */ }
+}
+
+$("team-add").addEventListener("click", async () => {
+  const name = $("team-name").value.trim();
+  const tenant = $("team-tenant").value.trim();
+  const scope = $("team-scope").value;
+  if (!tenant) { toast(t("ph.teamTenant")); return; }
+  try {
+    const d = await api("/v1/keys", { tenant, scope, name: name || undefined });
+    const box = $("team-newkey");
+    box.hidden = false;
+    box.innerHTML = `<div class="muted">${esc(t("team.newKeyHint"))}</div>
+      <div class="mono team-key-full">${esc(d.key)}</div>
+      <button class="btn" id="team-copy">${esc(t("team.copy"))}</button>`;
+    $("team-copy").addEventListener("click", async (ev) => {
+      try {
+        await navigator.clipboard.writeText(d.key);
+        ev.target.textContent = t("team.copied");
+      } catch (e) { toast(e.message); }
+    });
+    toast(t("team.issued"));
+    loadTeam();
+  } catch (e) { toast(e.message); }
+});
 
 /* ---------- stats ---------- */
 async function loadStats() {

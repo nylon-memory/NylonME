@@ -1,969 +1,1077 @@
 {
-  "openapi": "3.0.3",
-  "info": {
-    "title": "NylonME Memory Engine REST API",
-    "version": "0.2.1",
-    "description": "REST translation of the gRPC contract (proto/nylon/v1/memory.proto). Both entry points share the same write path. Served by the engine itself (default http://127.0.0.1:50052). When the engine has API-key auth enabled (NYLON_API_KEYS / NYLON_API_KEYS_FILE), pass credentials via the `x-api-key` header or `Authorization: Bearer <key>`; each key is bound to a tenant and a scope (read/write/admin). Without keys configured the engine runs in open single-machine mode.",
-    "license": {
-      "name": "Apache-2.0"
+ "openapi": "3.0.3",
+ "info": {
+  "title": "NylonME Memory Engine REST API",
+  "version": "0.2.1",
+  "description": "REST translation of the gRPC contract (proto/nylon/v1/memory.proto). Both entry points share the same write path. Served by the engine itself (default http://127.0.0.1:50052). When the engine has API-key auth enabled (NYLON_API_KEYS / NYLON_API_KEYS_FILE), pass credentials via the `x-api-key` header or `Authorization: Bearer <key>`; each key is bound to a tenant and a scope (read/write/admin). Without keys configured the engine runs in open single-machine mode.",
+  "license": {
+   "name": "Apache-2.0"
+  }
+ },
+ "servers": [
+  {
+   "url": "http://127.0.0.1:50052"
+  }
+ ],
+ "paths": {
+  "/v1/stats": {
+   "get": {
+    "summary": "Engine runtime stats",
+    "operationId": "getStats",
+    "responses": {
+     "200": {
+      "description": "Runtime counters",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Stats"
+        }
+       }
+      }
+     }
     }
+   }
   },
-  "servers": [
-    {
-      "url": "http://127.0.0.1:50052"
-    }
-  ],
-  "paths": {
-    "/v1/stats": {
-      "get": {
-        "summary": "Engine runtime stats",
-        "operationId": "getStats",
-        "responses": {
-          "200": {
-            "description": "Runtime counters",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Stats"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/nodes": {
-      "get": {
-        "summary": "List memory nodes (newest first)",
-        "operationId": "listNodes",
-        "parameters": [
-          {
-            "name": "tenant",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "default": "default"
-            },
-            "description": "Tenant scope (enforced; cross-tenant data is never listed)"
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by owner_id (alias: owner_id)"
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 0
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 50,
-              "maximum": 500
-            },
-            "description": "Page size (capped at 500; use offset + has_more to page deterministically)"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Page of node summaries",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "total": {
-                      "type": "integer"
-                    },
-                    "has_more": {
-                      "type": "boolean",
-                      "description": "true when offset + returned < total (more pages available)"
-                    },
-                    "nodes": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/NodeSummary"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/nodes/{id}": {
-      "get": {
-        "summary": "Read a single node with real-time tension",
-        "operationId": "getNode",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "name": "tenant",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "default": "default"
-            },
-            "description": "Tenant scope (cross-tenant reads return 404)"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Node detail",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NodeDetail"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Node not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
+  "/v1/nodes": {
+   "get": {
+    "summary": "List memory nodes (newest first)",
+    "operationId": "listNodes",
+    "parameters": [
+     {
+      "name": "tenant",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "default"
       },
-      "delete": {
-        "summary": "Forget a node (tombstone; write scope)",
-        "operationId": "deleteNode",
-        "description": "Logically deletes the node and its outgoing edges. Tombstoned nodes are invisible to list/get/resonate/search; physical removal happens on compaction. Cross-tenant deletes return 404 without exposing existence.",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer"
-            }
+      "description": "Tenant scope (enforced; cross-tenant data is never listed)"
+     },
+     {
+      "name": "owner",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      },
+      "description": "Filter by owner_id (alias: owner_id)"
+     },
+     {
+      "name": "offset",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "default": 0
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "default": 50,
+       "maximum": 500
+      },
+      "description": "Page size (capped at 500; use offset + has_more to page deterministically)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Page of node summaries",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "total": {
+           "type": "integer"
           },
-          {
-            "name": "tenant",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "default": "default"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Deletion result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "deleted": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
+          "has_more": {
+           "type": "boolean",
+           "description": "true when offset + returned < total (more pages available)"
           },
-          "404": {
-            "description": "Node not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/graph": {
-      "get": {
-        "summary": "Graph view for visualization (latest N nodes + internal edges)",
-        "operationId": "graphView",
-        "parameters": [
-          {
-            "name": "tenant",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "default": "default"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 300,
-              "maximum": 1000
-            },
-            "description": "Max nodes returned (newest first). Edges are kept only when both endpoints are in the returned set."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Graph view",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "total": {
-                      "type": "integer",
-                      "description": "Total live nodes in the tenant (may exceed nodes.length when truncated)"
-                    },
-                    "nodes": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": { "type": "integer" },
-                          "owner_id": { "type": "string" },
-                          "fact": { "type": "string" },
-                          "tension": { "type": "number" },
-                          "created_at": { "type": "integer" }
-                        }
-                      }
-                    },
-                    "edges": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "from": { "type": "integer" },
-                          "to": { "type": "integer" },
-                          "weight": { "type": "number" }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/audit": {
-      "get": {
-        "summary": "Query audit events (newest first; L2.3 audit event stream)",
-        "operationId": "listAuditEvents",
-        "parameters": [
-          {
-            "name": "tenant",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by tenant (tenant-bound keys are always limited to their own tenant)"
-          },
-          {
-            "name": "owner",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by owner_id"
-          },
-          {
-            "name": "action",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "weave",
-                "weave_session",
-                "resonate",
-                "search",
-                "get_node",
-                "denied"
-              ]
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "default": 200,
-              "maximum": 1000
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Recent audit events from the in-memory window (full history persists in audit.jsonl)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "events": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/AuditEvent"
-                      }
-                    },
-                    "disabled": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/weave": {
-      "post": {
-        "summary": "Weave a raw event into memory (filament decomposition + auto-linking + conflict detection)",
-        "operationId": "weave",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WeaveRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Weave result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WeaveResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid argument",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/weave_session": {
-      "post": {
-        "summary": "Two-tier session write: leaf events + LLM-abstracted fact layer",
-        "operationId": "weaveSession",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WeaveSessionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Session write result",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WeaveSessionResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/resonate": {
-      "post": {
-        "summary": "Context resonance recall: seeds + graph spreading under a global activation budget",
-        "operationId": "resonate",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResonateRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Activated memory cluster",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResonateResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/search": {
-      "post": {
-        "summary": "Vector top-k search (caller supplies the embedding)",
-        "operationId": "search",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SearchRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Nearest neighbors",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SearchResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/feedback": {
-      "post": {
-        "summary": "Answer-quality receipt: report a failed memory-based answer (down/wrong/insufficient). Persisted durably; the idle reflection worker generates targeted inferences for reported failures (feedback-driven reflection).",
-        "operationId": "reportFeedback",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FeedbackRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Receipt recorded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FeedbackResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "components": {
-    "schemas": {
-      "Stats": {
-        "type": "object",
-        "properties": {
           "nodes": {
-            "type": "integer"
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/NodeSummary"
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/nodes/{id}": {
+   "get": {
+    "summary": "Read a single node with real-time tension",
+    "operationId": "getNode",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "tenant",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "default"
+      },
+      "description": "Tenant scope (cross-tenant reads return 404)"
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Node detail",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/NodeDetail"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Node not found",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "summary": "Forget a node (tombstone; write scope)",
+    "operationId": "deleteNode",
+    "description": "Logically deletes the node and its outgoing edges. Tombstoned nodes are invisible to list/get/resonate/search; physical removal happens on compaction. Cross-tenant deletes return 404 without exposing existence.",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "name": "tenant",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "default"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Deletion result",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "deleted": {
+           "type": "boolean"
+          }
+         }
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Node not found",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/graph": {
+   "get": {
+    "summary": "Graph view for visualization (latest N nodes + internal edges)",
+    "operationId": "graphView",
+    "parameters": [
+     {
+      "name": "tenant",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "default": "default"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "default": 300,
+       "maximum": 1000
+      },
+      "description": "Max nodes returned (newest first). Edges are kept only when both endpoints are in the returned set."
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Graph view",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "total": {
+           "type": "integer",
+           "description": "Total live nodes in the tenant (may exceed nodes.length when truncated)"
+          },
+          "nodes": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "id": {
+              "type": "integer"
+             },
+             "owner_id": {
+              "type": "string"
+             },
+             "fact": {
+              "type": "string"
+             },
+             "tension": {
+              "type": "number"
+             },
+             "created_at": {
+              "type": "integer"
+             }
+            }
+           }
           },
           "edges": {
-            "type": "integer"
-          },
-          "embed_dims": {
-            "type": "integer"
-          },
-          "embedder": {
-            "type": "boolean",
-            "description": "embedding channel enabled (NYLON_EMBED_URL)"
-          },
-          "embedder_status": {
-            "type": "string",
-            "enum": ["disabled", "ok", "degraded"],
-            "description": "embedding channel health: disabled=not configured | ok=working | degraded=consecutive embed call failures (recall falls back to lexical/graph only)"
-          },
-          "embed_failures": {
-            "type": "integer",
-            "description": "consecutive embed call failures (0 = healthy)"
-          },
-          "embedder_last_error": {
-            "type": "string",
-            "description": "most recent embed error summary (omitted when healthy)"
-          },
-          "llm": {
-            "type": "boolean",
-            "description": "LLM weave channel enabled (NYLON_LLM_URL)"
-          }
-        }
-      },
-      "Filaments": {
-        "type": "object",
-        "properties": {
-          "fact": {
-            "type": "string"
-          },
-          "emotion_valence": {
-            "type": "number",
-            "format": "float",
-            "minimum": -1,
-            "maximum": 1
-          },
-          "emotion_intensity": {
-            "type": "number",
-            "format": "float",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "created_at": {
-            "type": "integer",
-            "format": "int64",
-            "description": "unix seconds"
-          },
-          "decay_rate": {
-            "type": "number",
-            "format": "float",
-            "description": "forgetting rate, 1/day"
-          },
-          "relations": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "confidence": {
-            "type": "number",
-            "format": "float",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "mentions_7d": {
-            "type": "integer"
-          }
-        }
-      },
-      "NodeSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer"
-          },
-          "owner_id": {
-            "type": "string"
-          },
-          "fact": {
-            "type": "string"
-          },
-          "tension": {
-            "type": "number",
-            "format": "float",
-            "description": "real-time tension"
-          },
-          "created_at": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "relations": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "confidence": {
-            "type": "number",
-            "format": "float"
-          },
-          "mentions_7d": {
-            "type": "integer"
-          }
-        }
-      },
-      "NodeDetail": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "integer"
-          },
-          "filaments": {
-            "$ref": "#/components/schemas/Filaments"
-          },
-          "current_tension": {
-            "type": "number",
-            "format": "float"
-          }
-        }
-      },
-      "ActivatedNode": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "integer"
-          },
-          "resonance": {
-            "type": "number",
-            "format": "float"
-          },
-          "filaments": {
-            "$ref": "#/components/schemas/Filaments"
-          }
-        }
-      },
-      "WeaveRequest": {
-        "type": "object",
-        "required": [
-          "owner_id",
-          "raw_event"
-        ],
-        "properties": {
-          "owner_id": {
-            "type": "string"
-          },
-          "raw_event": {
-            "type": "string"
-          },
-          "tenant_id": {
-            "type": "string",
-            "default": "default"
-          },
-          "task": {
-            "type": "string",
-            "description": "task context, becomes a relation filament"
-          },
-          "emotion_valence": {
-            "type": "number",
-            "format": "float"
-          }
-        }
-      },
-      "WeaveResponse": {
-        "type": "object",
-        "properties": {
-          "node_id": {
-            "type": "integer"
-          },
-          "linked_nodes": {
-            "type": "array",
-            "items": {
+           "type": "array",
+           "items": {
+            "type": "object",
+            "properties": {
+             "from": {
               "type": "integer"
-            }
-          },
-          "conflict_nodes": {
-            "type": "array",
-            "items": {
+             },
+             "to": {
               "type": "integer"
+             },
+             "weight": {
+              "type": "number"
+             }
             }
+           }
           }
+         }
         }
-      },
-      "SessionEvent": {
-        "type": "object",
-        "required": [
-          "text"
-        ],
-        "properties": {
-          "text": {
-            "type": "string"
-          },
-          "speaker": {
-            "type": "string"
-          },
-          "event_id": {
-            "type": "string",
-            "description": "caller-side id for source mapping"
-          }
-        }
-      },
-      "WeaveSessionRequest": {
-        "type": "object",
-        "required": [
-          "owner_id",
-          "events"
-        ],
-        "properties": {
-          "owner_id": {
-            "type": "string"
-          },
-          "events": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/SessionEvent"
-            }
-          },
-          "tenant_id": {
-            "type": "string",
-            "default": "default"
-          },
-          "skip_abstract": {
-            "type": "boolean",
-            "default": false,
-            "description": "true = leaf layer only"
-          }
-        }
-      },
-      "WeaveSessionResponse": {
-        "type": "object",
-        "properties": {
-          "leaf_nodes": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "event_id": {
-                  "type": "string"
-                },
-                "node_id": {
-                  "type": "integer"
-                }
-              }
-            }
-          },
-          "fact_nodes": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "node_id": {
-                  "type": "integer"
-                },
-                "fact": {
-                  "type": "string"
-                },
-                "source_event_ids": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "abstract_status": {
-            "type": "string",
-            "enum": ["ok", "empty", "failed", "skipped", "disabled"],
-            "description": "abstraction-layer outcome: ok=facts extracted | empty=LLM ok but no facts | failed=LLM call/parse failed (batch-split retried) | skipped=skip_abstract or no events | disabled=no LLM configured"
-          }
-        }
-      },
-      "ResonateRequest": {
-        "type": "object",
-        "required": [
-          "owner_id",
-          "query"
-        ],
-        "properties": {
-          "owner_id": {
-            "type": "string"
-          },
-          "query": {
-            "type": "string"
-          },
-          "tenant_id": {
-            "type": "string",
-            "default": "default"
-          },
-          "budget": {
-            "type": "integer",
-            "default": 0,
-            "description": "activation budget: graph spreading scale, 0 = engine default (does NOT cap returned count; use top_k)"
-          },
-          "top_k": {
-            "type": "integer",
-            "default": 0,
-            "description": "max number of returned nodes, 0 = unlimited"
-          },
-          "max_hops": {
-            "type": "integer",
-            "description": "0 = precise recall (seed-only, no spreading); omit for adaptive default"
-          },
-          "task": {
-            "type": "string"
-          },
-          "emotion_valence": {
-            "type": "number",
-            "format": "float"
-          }
-        }
-      },
-      "ResonateResponse": {
-        "type": "object",
-        "properties": {
-          "activated": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ActivatedNode"
-            }
-          },
-          "seed_ids": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
-          }
-        }
-      },
-      "SearchRequest": {
-        "type": "object",
-        "required": [
-          "owner_id",
-          "embedding"
-        ],
-        "properties": {
-          "owner_id": {
-            "type": "string"
-          },
-          "embedding": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "float"
-            }
-          },
-          "tenant_id": {
-            "type": "string",
-            "default": "default"
-          },
-          "top_k": {
-            "type": "integer",
-            "default": 10
-          }
-        }
-      },
-      "SearchResponse": {
-        "type": "object",
-        "properties": {
-          "neighbors": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ActivatedNode"
-            }
-          }
-        }
-      },
-      "Error": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          }
-        }
-      },
-      "AuditEvent": {
-        "type": "object",
-        "properties": {
-          "ts": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "action": {
-            "type": "string"
-          },
-          "tenant": {
-            "type": "string"
-          },
-          "owner": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          }
-        }
-      },
-      "FeedbackRequest": {
-        "type": "object",
-        "required": [
-          "owner_id",
-          "query"
-        ],
-        "properties": {
-          "owner_id": {
-            "type": "string"
-          },
-          "query": {
-            "type": "string",
-            "description": "The original query that was answered badly"
-          },
-          "rating": {
-            "type": "string",
-            "enum": [
-              "down",
-              "wrong",
-              "insufficient"
-            ],
-            "default": "down"
-          },
-          "comment": {
-            "type": "string",
-            "description": "Optional: what the correct answer should be / what is missing"
-          },
-          "shown_node_ids": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint64"
-            },
-            "description": "Optional: node ids that were shown to the user"
-          },
-          "tenant_id": {
-            "type": "string"
-          }
-        }
-      },
-      "FeedbackResponse": {
-        "type": "object",
-        "properties": {
-          "recorded": {
-            "type": "boolean"
-          }
-        }
+       }
       }
-    },
-    "securitySchemes": {
-      "ApiKeyAuth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "x-api-key"
-      },
-      "BearerAuth": {
-        "type": "http",
-        "scheme": "bearer"
-      }
+     }
     }
+   }
   },
-  "security": [
-    {
-      "ApiKeyAuth": []
-    },
-    {
-      "BearerAuth": []
+  "/v1/audit": {
+   "get": {
+    "summary": "Query audit events (newest first; L2.3 audit event stream)",
+    "operationId": "listAuditEvents",
+    "parameters": [
+     {
+      "name": "tenant",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      },
+      "description": "Filter by tenant (tenant-bound keys are always limited to their own tenant)"
+     },
+     {
+      "name": "owner",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      },
+      "description": "Filter by owner_id"
+     },
+     {
+      "name": "action",
+      "in": "query",
+      "schema": {
+       "type": "string",
+       "enum": [
+        "weave",
+        "weave_session",
+        "resonate",
+        "search",
+        "get_node",
+        "denied"
+       ]
+      }
+     },
+     {
+      "name": "actor",
+      "in": "query",
+      "schema": {
+       "type": "string"
+      },
+      "description": "Filter by key name (Team attribution)"
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "schema": {
+       "type": "integer",
+       "default": 200,
+       "maximum": 1000
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Recent audit events from the in-memory window (full history persists in audit.jsonl)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "events": {
+           "type": "array",
+           "items": {
+            "$ref": "#/components/schemas/AuditEvent"
+           }
+          },
+          "disabled": {
+           "type": "boolean"
+          }
+         }
+        }
+       }
+      }
+     }
     }
-  ]
+   }
+  },
+  "/v1/weave": {
+   "post": {
+    "summary": "Weave a raw event into memory (filament decomposition + auto-linking + conflict detection)",
+    "operationId": "weave",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/WeaveRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Weave result",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WeaveResponse"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Invalid argument",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/weave_session": {
+   "post": {
+    "summary": "Two-tier session write: leaf events + LLM-abstracted fact layer",
+    "operationId": "weaveSession",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/WeaveSessionRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Session write result",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WeaveSessionResponse"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/resonate": {
+   "post": {
+    "summary": "Context resonance recall: seeds + graph spreading under a global activation budget",
+    "operationId": "resonate",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ResonateRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Activated memory cluster",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ResonateResponse"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/search": {
+   "post": {
+    "summary": "Vector top-k search (caller supplies the embedding)",
+    "operationId": "search",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SearchRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Nearest neighbors",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchResponse"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/feedback": {
+   "post": {
+    "summary": "Answer-quality receipt: report a failed memory-based answer (down/wrong/insufficient). Persisted durably; the idle reflection worker generates targeted inferences for reported failures (feedback-driven reflection).",
+    "operationId": "reportFeedback",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FeedbackRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Receipt recorded",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FeedbackResponse"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/v1/keys": {
+   "get": {
+    "summary": "List API keys, masked (admin scope; Team management)",
+    "operationId": "listApiKeys",
+    "description": "Only available when the key table is file-backed (NYLON_API_KEYS_FILE). Returns 503 for inline NYLON_API_KEYS config or open mode.",
+    "responses": {
+     "200": {
+      "description": "Masked key list (first 12 chars + ellipsis), with tenant/scope/name"
+     }
+    }
+   },
+   "post": {
+    "summary": "Issue a new API key (admin scope; full key returned ONCE)",
+    "operationId": "issueApiKey",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "tenant",
+         "scope"
+        ],
+        "properties": {
+         "tenant": {
+          "type": "string",
+          "description": "memory space the key is bound to (wildcard requires admin scope)"
+         },
+         "scope": {
+          "type": "string",
+          "enum": [
+           "read",
+           "write",
+           "admin"
+          ]
+         },
+         "name": {
+          "type": "string",
+          "description": "member alias for audit attribution (Team)"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "The full key, shown only in this response"
+     }
+    }
+   }
+  },
+  "/v1/keys/{prefix}": {
+   "delete": {
+    "summary": "Revoke an API key by full key or unique prefix (admin scope)",
+    "operationId": "revokeApiKey",
+    "parameters": [
+     {
+      "name": "prefix",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Revoked key (masked)"
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Stats": {
+    "type": "object",
+    "properties": {
+     "nodes": {
+      "type": "integer"
+     },
+     "edges": {
+      "type": "integer"
+     },
+     "embed_dims": {
+      "type": "integer"
+     },
+     "embedder": {
+      "type": "boolean",
+      "description": "embedding channel enabled (NYLON_EMBED_URL)"
+     },
+     "embedder_status": {
+      "type": "string",
+      "enum": [
+       "disabled",
+       "ok",
+       "degraded"
+      ],
+      "description": "embedding channel health: disabled=not configured | ok=working | degraded=consecutive embed call failures (recall falls back to lexical/graph only)"
+     },
+     "embed_failures": {
+      "type": "integer",
+      "description": "consecutive embed call failures (0 = healthy)"
+     },
+     "embedder_last_error": {
+      "type": "string",
+      "description": "most recent embed error summary (omitted when healthy)"
+     },
+     "llm": {
+      "type": "boolean",
+      "description": "LLM weave channel enabled (NYLON_LLM_URL)"
+     }
+    }
+   },
+   "Filaments": {
+    "type": "object",
+    "properties": {
+     "fact": {
+      "type": "string"
+     },
+     "emotion_valence": {
+      "type": "number",
+      "format": "float",
+      "minimum": -1,
+      "maximum": 1
+     },
+     "emotion_intensity": {
+      "type": "number",
+      "format": "float",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "created_at": {
+      "type": "integer",
+      "format": "int64",
+      "description": "unix seconds"
+     },
+     "decay_rate": {
+      "type": "number",
+      "format": "float",
+      "description": "forgetting rate, 1/day"
+     },
+     "relations": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "confidence": {
+      "type": "number",
+      "format": "float",
+      "minimum": 0,
+      "maximum": 1
+     },
+     "mentions_7d": {
+      "type": "integer"
+     }
+    }
+   },
+   "NodeSummary": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "integer"
+     },
+     "owner_id": {
+      "type": "string"
+     },
+     "fact": {
+      "type": "string"
+     },
+     "tension": {
+      "type": "number",
+      "format": "float",
+      "description": "real-time tension"
+     },
+     "created_at": {
+      "type": "integer",
+      "format": "int64"
+     },
+     "relations": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "confidence": {
+      "type": "number",
+      "format": "float"
+     },
+     "mentions_7d": {
+      "type": "integer"
+     }
+    }
+   },
+   "NodeDetail": {
+    "type": "object",
+    "properties": {
+     "node_id": {
+      "type": "integer"
+     },
+     "filaments": {
+      "$ref": "#/components/schemas/Filaments"
+     },
+     "current_tension": {
+      "type": "number",
+      "format": "float"
+     }
+    }
+   },
+   "ActivatedNode": {
+    "type": "object",
+    "properties": {
+     "node_id": {
+      "type": "integer"
+     },
+     "resonance": {
+      "type": "number",
+      "format": "float"
+     },
+     "filaments": {
+      "$ref": "#/components/schemas/Filaments"
+     }
+    }
+   },
+   "WeaveRequest": {
+    "type": "object",
+    "required": [
+     "owner_id",
+     "raw_event"
+    ],
+    "properties": {
+     "owner_id": {
+      "type": "string"
+     },
+     "raw_event": {
+      "type": "string"
+     },
+     "tenant_id": {
+      "type": "string",
+      "default": "default"
+     },
+     "task": {
+      "type": "string",
+      "description": "task context, becomes a relation filament"
+     },
+     "emotion_valence": {
+      "type": "number",
+      "format": "float"
+     }
+    }
+   },
+   "WeaveResponse": {
+    "type": "object",
+    "properties": {
+     "node_id": {
+      "type": "integer"
+     },
+     "linked_nodes": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     },
+     "conflict_nodes": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "SessionEvent": {
+    "type": "object",
+    "required": [
+     "text"
+    ],
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "speaker": {
+      "type": "string"
+     },
+     "event_id": {
+      "type": "string",
+      "description": "caller-side id for source mapping"
+     }
+    }
+   },
+   "WeaveSessionRequest": {
+    "type": "object",
+    "required": [
+     "owner_id",
+     "events"
+    ],
+    "properties": {
+     "owner_id": {
+      "type": "string"
+     },
+     "events": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/SessionEvent"
+      }
+     },
+     "tenant_id": {
+      "type": "string",
+      "default": "default"
+     },
+     "skip_abstract": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = leaf layer only"
+     }
+    }
+   },
+   "WeaveSessionResponse": {
+    "type": "object",
+    "properties": {
+     "leaf_nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "event_id": {
+         "type": "string"
+        },
+        "node_id": {
+         "type": "integer"
+        }
+       }
+      }
+     },
+     "fact_nodes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "node_id": {
+         "type": "integer"
+        },
+        "fact": {
+         "type": "string"
+        },
+        "source_event_ids": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        }
+       }
+      }
+     },
+     "abstract_status": {
+      "type": "string",
+      "enum": [
+       "ok",
+       "empty",
+       "failed",
+       "skipped",
+       "disabled"
+      ],
+      "description": "abstraction-layer outcome: ok=facts extracted | empty=LLM ok but no facts | failed=LLM call/parse failed (batch-split retried) | skipped=skip_abstract or no events | disabled=no LLM configured"
+     }
+    }
+   },
+   "ResonateRequest": {
+    "type": "object",
+    "required": [
+     "owner_id",
+     "query"
+    ],
+    "properties": {
+     "owner_id": {
+      "type": "string"
+     },
+     "query": {
+      "type": "string"
+     },
+     "tenant_id": {
+      "type": "string",
+      "default": "default"
+     },
+     "budget": {
+      "type": "integer",
+      "default": 0,
+      "description": "activation budget: graph spreading scale, 0 = engine default (does NOT cap returned count; use top_k)"
+     },
+     "top_k": {
+      "type": "integer",
+      "default": 0,
+      "description": "max number of returned nodes, 0 = unlimited"
+     },
+     "max_hops": {
+      "type": "integer",
+      "description": "0 = precise recall (seed-only, no spreading); omit for adaptive default"
+     },
+     "task": {
+      "type": "string"
+     },
+     "emotion_valence": {
+      "type": "number",
+      "format": "float"
+     }
+    }
+   },
+   "ResonateResponse": {
+    "type": "object",
+    "properties": {
+     "activated": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/ActivatedNode"
+      }
+     },
+     "seed_ids": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "SearchRequest": {
+    "type": "object",
+    "required": [
+     "owner_id",
+     "embedding"
+    ],
+    "properties": {
+     "owner_id": {
+      "type": "string"
+     },
+     "embedding": {
+      "type": "array",
+      "items": {
+       "type": "number",
+       "format": "float"
+      }
+     },
+     "tenant_id": {
+      "type": "string",
+      "default": "default"
+     },
+     "top_k": {
+      "type": "integer",
+      "default": 10
+     }
+    }
+   },
+   "SearchResponse": {
+    "type": "object",
+    "properties": {
+     "neighbors": {
+      "type": "array",
+      "items": {
+       "$ref": "#/components/schemas/ActivatedNode"
+      }
+     }
+    }
+   },
+   "Error": {
+    "type": "object",
+    "properties": {
+     "error": {
+      "type": "string"
+     }
+    }
+   },
+   "AuditEvent": {
+    "type": "object",
+    "properties": {
+     "ts": {
+      "type": "integer",
+      "format": "int64"
+     },
+     "action": {
+      "type": "string"
+     },
+     "tenant": {
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "detail": {
+      "type": "string"
+     }
+    }
+   },
+   "FeedbackRequest": {
+    "type": "object",
+    "required": [
+     "owner_id",
+     "query"
+    ],
+    "properties": {
+     "owner_id": {
+      "type": "string"
+     },
+     "query": {
+      "type": "string",
+      "description": "The original query that was answered badly"
+     },
+     "rating": {
+      "type": "string",
+      "enum": [
+       "down",
+       "wrong",
+       "insufficient"
+      ],
+      "default": "down"
+     },
+     "comment": {
+      "type": "string",
+      "description": "Optional: what the correct answer should be / what is missing"
+     },
+     "shown_node_ids": {
+      "type": "array",
+      "items": {
+       "type": "integer",
+       "format": "uint64"
+      },
+      "description": "Optional: node ids that were shown to the user"
+     },
+     "tenant_id": {
+      "type": "string"
+     }
+    }
+   },
+   "FeedbackResponse": {
+    "type": "object",
+    "properties": {
+     "recorded": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "securitySchemes": {
+   "ApiKeyAuth": {
+    "type": "apiKey",
+    "in": "header",
+    "name": "x-api-key"
+   },
+   "BearerAuth": {
+    "type": "http",
+    "scheme": "bearer"
+   }
+  }
+ },
+ "security": [
+  {
+   "ApiKeyAuth": []
+  },
+  {
+   "BearerAuth": []
+  }
+ ]
 }

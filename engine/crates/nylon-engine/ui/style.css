@@ -172,6 +172,16 @@ main { flex: 1; overflow: auto; padding: 16px; }
 .result .kv { display: flex; gap: 8px; padding: 2px 0; }
 .result .kv b { color: var(--muted); font-weight: 400; min-width: 110px; }
 .result a { color: var(--accent); cursor: pointer; text-decoration: none; font-family: var(--mono); }
+.team-key-full {
+  font-family: var(--mono);
+  font-size: 13px;
+  word-break: break-all;
+  user-select: all;
+  padding: 8px;
+  margin: 6px 0;
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+}
 
 .drawer {
   position: fixed; top: var(--topbar-h); right: 0; bottom: 0; width: 420px;

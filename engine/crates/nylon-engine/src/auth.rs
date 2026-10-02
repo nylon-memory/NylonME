@@ -57,6 +57,8 @@ impl Scope {
 pub struct KeyGrant {
     pub tenant: String,
     pub scope: Scope,
+    /// 成员别名（Team 功能）：key 表里可选的 name 字段，审计归因用。
+    pub name: Option<String>,
 }
 
 impl KeyGrant {
@@ -82,6 +84,7 @@ struct KeyEntry {
     key: String,
     tenant: String,
     scope: Option<String>,
+    name: Option<String>,
 }
 
 impl ApiKeys {
@@ -168,6 +171,7 @@ impl ApiKeys {
                 KeyGrant {
                     tenant: entry.tenant,
                     scope,
+                    name: entry.name,
                 },
             );
         }
@@ -185,6 +189,12 @@ impl ApiKeys {
 
     pub fn len(&self) -> usize {
         self.grants.read().unwrap().len()
+    }
+
+    /// key 表文件路径（文件源时 Some；内联 JSON 配置时 None——
+    /// REST key 管理 API 仅在文件源下可用）。
+    pub fn file_path(&self) -> Option<std::path::PathBuf> {
+        self.file.clone()
     }
 
     /// 文件源热加载：mtime 变了就重读；解析失败保留旧表
@@ -352,6 +362,7 @@ pub fn keys_add(
     tenant: &str,
     scope: &str,
     explicit_key: Option<String>,
+    name: Option<&str>,
 ) -> Result<String, String> {
     if Scope::parse(scope).is_none() {
         return Err(format!("scope 非法: {scope}（可选 read/write/admin）"));
@@ -370,13 +381,17 @@ pub fn keys_add(
     {
         return Err("key 已存在".into());
     }
-    entries.push(serde_json::json!({"key": key, "tenant": tenant, "scope": scope}));
+    let mut entry = serde_json::json!({"key": key, "tenant": tenant, "scope": scope});
+    if let Some(n) = name.filter(|n| !n.trim().is_empty()) {
+        entry["name"] = serde_json::Value::String(n.trim().to_string());
+    }
+    entries.push(entry);
     write_keys_file(path, &serde_json::Value::Array(entries))?;
     Ok(key)
 }
 
-/// 列出 key（打码：前 12 位 + …），返回 (打码 key, tenant, scope)。
-pub fn keys_list(path: &std::path::Path) -> Result<Vec<(String, String, String)>, String> {
+/// 列出 key（打码：前 12 位 + …），返回 (打码 key, tenant, scope, name)。
+pub fn keys_list(path: &std::path::Path) -> Result<Vec<(String, String, String, String)>, String> {
     let entries = read_keys_entries(path)?;
     Ok(entries
         .iter()
@@ -392,6 +407,10 @@ pub fn keys_list(path: &std::path::Path) -> Result<Vec<(String, String, String)>
                 e.get("scope")
                     .and_then(|s| s.as_str())
                     .unwrap_or("read")
+                    .to_string(),
+                e.get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
                     .to_string(),
             )
         })
@@ -522,6 +541,7 @@ mod tests {
         let grant = KeyGrant {
             tenant: "acme".into(),
             scope: Scope::Read,
+            name: None,
         };
         // 档位不足
         let err = authorize(Some(&grant), Scope::Write, "acme").unwrap_err();
@@ -532,6 +552,7 @@ mod tests {
         let write = KeyGrant {
             tenant: "acme".into(),
             scope: Scope::Write,
+            name: None,
         };
         let err = authorize(Some(&write), Scope::Write, "other").unwrap_err();
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -539,6 +560,7 @@ mod tests {
         let admin = KeyGrant {
             tenant: "*".into(),
             scope: Scope::Admin,
+            name: None,
         };
         assert!(authorize(Some(&admin), Scope::Write, "other").is_ok());
         // 开放模式放行
@@ -582,7 +604,12 @@ mod tests {
         let p = temp_keys_path("hotreload");
         let keys = ApiKeys::load_or_bootstrap(&p).unwrap();
         // 新增：文件被 keys add 改写后，不用重建 ApiKeys 就能认证新 key
-        let new_key = keys_add(&p, "acme", "write", None).unwrap();
+        let new_key = keys_add(&p, "acme", "write", None, Some("alice")).unwrap();
+        assert_eq!(
+            keys.authenticate(&new_key).unwrap().name.as_deref(),
+            Some("alice"),
+            "name 应随签发落盘并热加载"
+        );
         assert!(keys.authenticate(&new_key).is_some());
         // 吊销：新 key 立即失效，初始 admin 仍在
         let removed = keys_revoke(&p, &new_key).unwrap();
@@ -595,8 +622,8 @@ mod tests {
     #[test]
     fn revoke_ambiguous_prefix_rejected() {
         let p = temp_keys_path("revoke");
-        keys_add(&p, "t", "write", Some("nyl_aaaa1111".into())).unwrap();
-        keys_add(&p, "t", "write", Some("nyl_aaaa2222".into())).unwrap();
+        keys_add(&p, "t", "write", Some("nyl_aaaa1111".into()), None).unwrap();
+        keys_add(&p, "t", "write", Some("nyl_aaaa2222".into()), None).unwrap();
         assert!(keys_revoke(&p, "nyl_aaaa").is_err()); // 前缀不唯一
         assert_eq!(keys_revoke(&p, "nyl_aaaa1").unwrap(), "nyl_aaaa1111");
         std::fs::remove_file(&p).ok();
@@ -605,9 +632,9 @@ mod tests {
     #[test]
     fn keys_add_validates_scope_and_wildcard() {
         let p = temp_keys_path("validate");
-        assert!(keys_add(&p, "t", "superuser", None).is_err());
-        assert!(keys_add(&p, "*", "write", None).is_err());
-        assert!(keys_add(&p, "*", "admin", None).is_ok());
+        assert!(keys_add(&p, "t", "superuser", None, None).is_err());
+        assert!(keys_add(&p, "*", "write", None, None).is_err());
+        assert!(keys_add(&p, "*", "admin", None, None).is_ok());
         std::fs::remove_file(&p).ok();
     }
 }

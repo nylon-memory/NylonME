@@ -491,10 +491,19 @@ impl EngineService {
     }
 
     /// 记录一次操作（审计关闭时为零开销空调用）。
-    fn audit_op(&self, action: &str, tenant: &str, owner: &str, detail: String) {
+    /// actor = 发起请求的 key 别名（Team 归因），开放模式传 ""。
+    fn audit_op(&self, action: &str, tenant: &str, owner: &str, detail: String, actor: &str) {
         if let Some(a) = &self.audit {
-            a.emit(action, tenant, owner, detail);
+            a.emit(action, tenant, owner, detail, actor);
         }
+    }
+
+    /// 从 grant 提取操作者别名（Team 归因）；key 无 name 或开放模式时为 ""。
+    fn actor_of(grant: &Option<KeyGrant>) -> String {
+        grant
+            .as_ref()
+            .and_then(|g| g.name.clone())
+            .unwrap_or_default()
     }
 
     /// 鉴权 + 审计一体：拒绝时先落一条 denied 事件再返回错误（L2.3）。
@@ -512,6 +521,7 @@ impl EngineService {
                 tenant,
                 owner,
                 format!("{action}: {}", s.message()),
+                &Self::actor_of(&grant.cloned()),
             );
             return Err(s);
         }
@@ -657,7 +667,7 @@ impl EngineService {
 
     /// 手动 checkpoint：快照落盘 + 截断 WAL（L2.4 备份前置步骤）。
     /// serve 模式另有周期任务自动 checkpoint（NYLON_CHECKPOINT_SECS，默认 600s）。
-    pub(crate) fn checkpoint(&self) -> Result<(), Status> {
+    pub(crate) fn checkpoint(&self, actor: &str) -> Result<(), Status> {
         let mut inner = self
             .inner
             .lock()
@@ -666,7 +676,13 @@ impl EngineService {
             .store
             .checkpoint()
             .map_err(|e| Status::internal(format!("checkpoint: {e}")))?;
-        self.audit_op("checkpoint", "", "", "snapshot + wal truncate".into());
+        self.audit_op(
+            "checkpoint",
+            "",
+            "",
+            "snapshot + wal truncate".into(),
+            actor,
+        );
         Ok(())
     }
 
@@ -711,7 +727,12 @@ impl EngineService {
 
     /// 删除节点（产品语义 = "遗忘"）：校验租户归属后打墓碑，WAL 落盘后返回。
     /// 跨租户删除按不存在处理，不暴露节点存在性（与 get_node 同一策略）。
-    pub(crate) async fn remove_node(&self, tenant: &str, id: u32) -> Result<bool, Status> {
+    pub(crate) async fn remove_node(
+        &self,
+        tenant: &str,
+        id: u32,
+        actor: &str,
+    ) -> Result<bool, Status> {
         let (existed, ticket) = {
             let mut inner = self
                 .inner
@@ -730,7 +751,7 @@ impl EngineService {
                 .store
                 .remove_node(id)
                 .map_err(|e| Status::internal(format!("remove_node: {e}")))?;
-            self.audit_op("delete_node", tenant, &owner, format!("node={id}"));
+            self.audit_op("delete_node", tenant, &owner, format!("node={id}"), actor);
             (existed, ticket)
         };
         if existed {
@@ -1848,6 +1869,7 @@ impl MemoryEngine for EngineService {
                 linked.len(),
                 conflict_nodes.len()
             ),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(WeaveResponse {
             node_id: local as u64,
@@ -2052,6 +2074,7 @@ impl MemoryEngine for EngineService {
             &r.tenant_id,
             &r.owner_id,
             format!("leaves={} facts={}", leaf_nodes.len(), fact_nodes.len()),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(WeaveSessionResponse {
             leaf_nodes,
@@ -2417,6 +2440,7 @@ impl MemoryEngine for EngineService {
                 out.len(),
                 seeds.len()
             ),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(ResonateResponse {
             activated: out,
@@ -2480,6 +2504,7 @@ impl MemoryEngine for EngineService {
             &r.tenant_id,
             &r.owner_id,
             format!("top_k={} hits={}", k, out.len()),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(SearchResponse { neighbors: out }))
     }
@@ -2512,6 +2537,7 @@ impl MemoryEngine for EngineService {
                 &r.tenant_id,
                 "",
                 format!("node={} miss(cross-tenant)", r.node_id),
+                &Self::actor_of(&grant),
             );
             return Err(Status::not_found(format!(
                 "node {} 不存在或已删除",
@@ -2524,6 +2550,7 @@ impl MemoryEngine for EngineService {
             &r.tenant_id,
             &node.owner_id,
             format!("node={}", r.node_id),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(GetNodeResponse {
             node_id: r.node_id,
@@ -2582,6 +2609,7 @@ impl MemoryEngine for EngineService {
             &rec.tenant_id,
             &rec.owner_id,
             format!("rating={} query={:.60}", rec.rating, rec.query),
+            &Self::actor_of(&grant),
         );
         Ok(Response::new(FeedbackResponse { recorded: true }))
     }
@@ -2995,12 +3023,15 @@ mod tests {
         let a_id = weave_as(&svc, "tenant-a", "alice", "将被遗忘的事实").await;
 
         // 跨租户删除：按不存在处理，不暴露存在性
-        let err = svc.remove_node("tenant-b", a_id as u32).await.unwrap_err();
+        let err = svc
+            .remove_node("tenant-b", a_id as u32, "")
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
 
         // 本租户删除成功；重复删除按不存在处理
-        assert!(svc.remove_node("tenant-a", a_id as u32).await.unwrap());
-        assert!(svc.remove_node("tenant-a", a_id as u32).await.is_err());
+        assert!(svc.remove_node("tenant-a", a_id as u32, "").await.unwrap());
+        assert!(svc.remove_node("tenant-a", a_id as u32, "").await.is_err());
 
         // 删除后列表与读取均不可见
         let (total, _) = svc.list_nodes("tenant-a", None, 0, 50).unwrap();
@@ -3085,6 +3116,7 @@ mod tests {
         req.extensions_mut().insert(KeyGrant {
             tenant: "tenant-a".into(),
             scope: crate::auth::Scope::Write,
+            name: None,
         });
         let err = svc.weave(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -3099,6 +3131,7 @@ mod tests {
         req.extensions_mut().insert(KeyGrant {
             tenant: "*".into(),
             scope: crate::auth::Scope::Admin,
+            name: None,
         });
         assert!(svc.weave(req).await.is_ok());
     }
