@@ -338,10 +338,13 @@ impl EngineService {
                 if n.embedding.len() == embed_dims {
                     index.add(id, &n.embedding);
                     restored += 1;
+                    if restored % 50000 == 0 {
+                        println!("[engine] HNSW 回填进度 {restored}");
+                    }
                 }
             }
             if restored > 0 {
-                eprintln!("[engine] HNSW 索引已从持久化节点回填 {restored} 条");
+                println!("[engine] HNSW 索引已从持久化节点回填 {restored} 条");
             }
         }
         let inner = Arc::new(Mutex::new(Inner { store, index }));

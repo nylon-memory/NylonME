@@ -40,7 +40,36 @@ pub struct HttpEmbedder {
 #[derive(serde::Serialize)]
 struct EmbedReq<'a> {
     model: &'a str,
-    input: &'a [String],
+    input: &'a [std::borrow::Cow<'a, str>],
+}
+
+/// 单条输入的字节上限（默认 20000，可用 NYLON_EMBED_MAX_BYTES 覆盖）。
+/// bge-m3 类模型上下文 8192 tokens：20KB ≈ 英文 ~5k tokens / CJK ~6.7k chars，
+/// 均低于上限。超长输入（如剧本/长文档粘贴进单条事件）此前会被服务端 400
+/// 拒绝，导致 weave 整体失败（2026-10-08 LongMemEval 实例 4388e9dd 挂死事故）。
+/// 嵌入语义集中在文本前部，截断代价远小于编织失败。
+fn max_embed_bytes() -> usize {
+    std::env::var("NYLON_EMBED_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20_000)
+}
+
+/// 按 UTF-8 字符边界截断到字节上限；未超限则零拷贝借用。
+fn truncate_for_embed(text: &str, cap: usize) -> std::borrow::Cow<'_, str> {
+    if text.len() <= cap {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut end = cap;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    eprintln!(
+        "[embed] 输入 {} 字节超过上限 {}，已截断（尾部不参与嵌入，原文仍完整落库）",
+        text.len(),
+        cap
+    );
+    std::borrow::Cow::Borrowed(&text[..end])
 }
 #[derive(serde::Deserialize)]
 struct EmbedResp {
@@ -76,9 +105,12 @@ impl HttpEmbedder {
 impl Embedder for HttpEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let endpoint = self.url.trim_end_matches('/').to_string() + "/v1/embeddings";
+        let cap = max_embed_bytes();
+        let inputs: Vec<std::borrow::Cow<'_, str>> =
+            texts.iter().map(|t| truncate_for_embed(t, cap)).collect();
         let mut req = self.client.post(&endpoint).json(&EmbedReq {
             model: &self.model,
-            input: texts,
+            input: &inputs,
         });
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
@@ -204,5 +236,25 @@ mod tests {
         let out = emb.embed(&["hello".into(), "world".into()]).await.unwrap();
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|v| v.len() == 8));
+    }
+
+    #[test]
+    fn truncate_respects_cap_and_char_boundary() {
+        // 短文本零拷贝借用
+        let short = "hello memory".to_string();
+        assert!(matches!(
+            truncate_for_embed(&short, 100),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // ASCII 超长截到 cap
+        let long_ascii = "a".repeat(30_000);
+        let out = truncate_for_embed(&long_ascii, 20_000);
+        assert_eq!(out.len(), 20_000);
+        // CJK（3 字节/字符）截断必须落在字符边界，且不超过 cap
+        let long_cjk = "记".repeat(10_000); // 30_000 字节
+        let out = truncate_for_embed(&long_cjk, 20_000);
+        assert!(out.len() <= 20_000);
+        assert_eq!(out.len() % 3, 0, "截断必须落在 UTF-8 字符边界");
+        assert!(out.chars().all(|c| c == '记'));
     }
 }

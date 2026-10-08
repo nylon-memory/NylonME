@@ -65,6 +65,9 @@ fn qa_llm_from_env() -> Option<std::sync::Arc<dyn ChatModel>> {
 }
 
 /// 网络抖动重试（与 locomo_eval 同源）。
+/// 2026-10-08：单次 RPC 加 300s 硬超时（r5 干净跑在实例 4388e9dd 的活编织上
+/// 挂死 25 分钟零进展——无 TCP/零 CPU/WAL 停写，无任何报错通道；超时后走重试，
+/// 重试日志改用 println!（eprintln! 在 cargo test + PowerShell 重定向下不进日志）。
 async fn rpc_with_retry<F, Fut, T>(what: &str, mut f: F) -> T
 where
     F: FnMut() -> Fut,
@@ -72,13 +75,20 @@ where
 {
     let mut delay = 5u64;
     for attempt in 1..=8u32 {
-        match f().await {
+        let out = tokio::time::timeout(std::time::Duration::from_secs(300), f()).await;
+        let res = match out {
+            Ok(r) => r,
+            Err(_) => Err(tonic::Status::unavailable(format!(
+                "{what} RPC 300s 硬超时（疑似引擎侧挂起）"
+            ))),
+        };
+        match res {
             Ok(resp) => return resp.into_inner(),
             Err(e) => {
                 if attempt == 8 {
                     panic!("{what} 重试 8 次仍失败: {e:?}");
                 }
-                eprintln!("[eval] {what} 失败（第 {attempt}/8 次），{delay}s 后重试: {e}");
+                println!("[eval] {what} 失败（第 {attempt}/8 次），{delay}s 后重试: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                 delay = (delay * 3).min(120);
             }
@@ -99,10 +109,10 @@ async fn llm_json_retry(
             Ok(v) => return Some(v),
             Err(e) => {
                 if attempt == 4 {
-                    eprintln!("[eval] e2e LLM 调用重试 4 次仍失败: {e}");
+                    println!("[eval] e2e LLM 调用重试 4 次仍失败: {e}");
                     return None;
                 }
-                eprintln!("[eval] e2e LLM 调用失败（第 {attempt}/4 次），{delay}s 后重试: {e}");
+                println!("[eval] e2e LLM 调用失败（第 {attempt}/4 次），{delay}s 后重试: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                 delay = (delay * 2).min(60);
             }
@@ -242,7 +252,10 @@ async fn longmemeval_recall() {
         );
     }
 
+    eprintln!("[eval] 开始加载存储 {:?}", store_path);
+    let t_load = std::time::Instant::now();
     let store = PersistentGraph::open(&store_path).unwrap();
+    eprintln!("[eval] 存储加载完成 ({:?})", t_load.elapsed());
     let dims: usize = std::env::var("NYLON_EMBED_DIMS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -267,7 +280,9 @@ async fn longmemeval_recall() {
         panic!("LongMemEval 评测要求 NYLON_SESSION_WEAVE=1 且配置 NYLON_LLM_URL（双层写入口径）");
     }
     let svc_llm = llm.clone();
+    println!("[eval] 构建 EngineService（含 HNSW 回填）...");
     let svc = EngineService::new(store, dims, embedder, svc_llm);
+    println!("[eval] EngineService 就绪，绑定端口...");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -278,6 +293,7 @@ async fn longmemeval_recall() {
             .unwrap();
     });
     let client = MemoryEngineClient::connect(addr).await.unwrap();
+    println!("[eval] gRPC 客户端已连接，进入评测循环");
 
     let mut total = 0usize;
     let mut hit = 0usize;
@@ -297,6 +313,16 @@ async fn longmemeval_recall() {
             .as_str()
             .unwrap_or("unknown")
             .to_string();
+        // NYLON_LME_SKIP_FIRST=N：跳过前 N 个已评测实例（断点续跑；2026-10-08
+        // 用于从 r5 干净跑挂死点 ord=487 恢复）。放在 loop 内而非切 indices，
+        // 保持日志序号 (ord+1)/500 与主跑一致，便于两份日志直接合并统计。
+        let skip_first: usize = std::env::var("NYLON_LME_SKIP_FIRST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if ord < skip_first {
+            continue;
+        }
         let qtype = inst["question_type"]
             .as_str()
             .unwrap_or("unknown")
@@ -390,6 +416,7 @@ async fn longmemeval_recall() {
             }
             let skip_abstract = std::env::var("NYLON_EVAL_SKIP_ABSTRACT").is_ok();
             // 实例内滑动窗口并发（JoinSet，不加新依赖）：窗口大小 = concurrency
+            let job_total = work.len();
             let mut results: Vec<WeaveSessionResponse> = Vec::new();
             let mut set: tokio::task::JoinSet<WeaveSessionResponse> = tokio::task::JoinSet::new();
             let mut iter = work.into_iter();
@@ -422,7 +449,14 @@ async fn longmemeval_recall() {
             for _ in 0..concurrency {
                 spawn_one(&mut iter, &mut set);
             }
+            let mut jobs_done = 0usize;
             while let Some(res) = set.join_next().await {
+                jobs_done += 1;
+                println!(
+                    "[eval] {qid} ({}/{}) weave_session 完成 {jobs_done}/{job_total}",
+                    ord + 1,
+                    indices.len()
+                );
                 results.push(res.expect("weave_session 任务 panic"));
                 spawn_one(&mut iter, &mut set);
             }

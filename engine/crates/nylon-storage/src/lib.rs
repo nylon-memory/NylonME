@@ -35,11 +35,21 @@ impl PersistentGraph {
     pub fn open(dir: impl AsRef<Path>) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
+        let t0 = std::time::Instant::now();
         let mut graph = load_snapshot(&dir.join(SNAPSHOT_FILE))?;
+        eprintln!("[persist] snapshot 加载完成 ({:?})", t0.elapsed());
+        let t1 = std::time::Instant::now();
         let (wal, ops) = Wal::open(&dir)?;
-        for op in ops {
+        eprintln!("[persist] WAL 解析完成：{} 条 op ({:?})", ops.len(), t1.elapsed());
+        let t2 = std::time::Instant::now();
+        let n = ops.len();
+        for (i, op) in ops.into_iter().enumerate() {
             apply(&mut graph, op);
+            if (i + 1) % 20000 == 0 {
+                eprintln!("[persist] 重放 {}/{} ({:?})", i + 1, n, t2.elapsed());
+            }
         }
+        eprintln!("[persist] 重放完成，共 {} 条 ({:?})", n, t2.elapsed());
         Ok(PersistentGraph { graph, wal, dir })
     }
 
