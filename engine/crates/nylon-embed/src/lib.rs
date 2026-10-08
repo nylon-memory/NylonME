@@ -43,16 +43,18 @@ struct EmbedReq<'a> {
     input: &'a [std::borrow::Cow<'a, str>],
 }
 
-/// 单条输入的字节上限（默认 20000，可用 NYLON_EMBED_MAX_BYTES 覆盖）。
-/// bge-m3 类模型上下文 8192 tokens：20KB ≈ 英文 ~5k tokens / CJK ~6.7k chars，
-/// 均低于上限。超长输入（如剧本/长文档粘贴进单条事件）此前会被服务端 400
-/// 拒绝，导致 weave 整体失败（2026-10-08 LongMemEval 实例 4388e9dd 挂死事故）。
+/// 单条输入的字节上限（默认 4500，可用 NYLON_EMBED_MAX_BYTES 覆盖）。
+/// 实测约束（2026-10-08）：ollama 的 llama-server 嵌入路径以 ubatch=2048 为
+/// 硬上限——即使 -c/OLLAMA_CONTEXT_LENGTH=8192，>2048 token 的单条输入仍
+/// 报 400 "input length exceeds the context length"。4500 字节 ≈ 英文
+/// 1150-1500 tokens / CJK 1500 chars（≤~1800 tokens），各语种均安全。
+/// 使用更大上下文/批量部署（TEI/vLLM 等）时应调高该值。
 /// 嵌入语义集中在文本前部，截断代价远小于编织失败。
 fn max_embed_bytes() -> usize {
     std::env::var("NYLON_EMBED_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(20_000)
+        .unwrap_or(4_500)
 }
 
 /// 按 UTF-8 字符边界截断到字节上限；未超限则零拷贝借用。
