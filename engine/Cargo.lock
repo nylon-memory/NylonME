@@ -934,11 +934,11 @@ dependencies = [
 
 [[package]]
 name = "nylon-core"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "nylon-embed"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "nylon-engine"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -980,14 +980,14 @@ dependencies = [
 
 [[package]]
 name = "nylon-graph"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "nylon-core",
 ]
 
 [[package]]
 name = "nylon-llm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "nylon-storage"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "nylon-core",
  "nylon-graph",
@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "nylon-vector"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "object"
