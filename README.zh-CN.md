@@ -179,7 +179,7 @@ RocksDB 支持周期快照 + WAL 截断（`NYLON_CHECKPOINT_SECS`，默认 600 �
 | `NYLON_PERSONA_REFLECT` | 关 | 异步反思中的画像节点抽取 |
 | `NYLON_REFLECT_IDLE_SECS` | — | 异步反思空闲触发间隔 |
 | `NYLON_HTTP_ADDR` | 127.0.0.1:50052 | HTTP/UI 监听地址（`off` 关闭） |
-| `NYLON_DATA_DIR` | ./nylon-data | RocksDB 数据目录 |
+| `NYLON_DATA_DIR` | `./nylon-data` 存在则沿用，否则 `~/.nylonme/data` | RocksDB 数据目录 |
 | `NYLON_CHECKPOINT_SECS` | 600 | 周期快照间隔（秒，0 关闭） |
 | `NYLON_API_KEYS_FILE` / `NYLON_API_KEYS` | — | API key 表（文件路径或内联 JSON） |
 | `NYLON_AUDIT` | 关 | 审计事件流开关 |

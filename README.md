@@ -179,7 +179,7 @@ RocksDB supports periodic snapshot + WAL truncation (`NYLON_CHECKPOINT_SECS`, de
 | `NYLON_PERSONA_REFLECT` | off | persona profile nodes in async reflection |
 | `NYLON_REFLECT_IDLE_SECS` | — | async reflection idle trigger interval |
 | `NYLON_HTTP_ADDR` | 127.0.0.1:50052 | HTTP/UI listen address (`off` disables) |
-| `NYLON_DATA_DIR` | ./nylon-data | RocksDB data directory |
+| `NYLON_DATA_DIR` | `./nylon-data` if it exists, else `~/.nylonme/data` | RocksDB data directory |
 | `NYLON_CHECKPOINT_SECS` | 600 | periodic snapshot interval in seconds (0 disables) |
 | `NYLON_API_KEYS_FILE` / `NYLON_API_KEYS` | — | API key table (file path or inline JSON) |
 | `NYLON_AUDIT` | off | audit event stream toggle |

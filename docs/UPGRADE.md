@@ -1,7 +1,7 @@
 # Upgrading NylonME (release binaries)
 
 > **中文速览**：升级 = **换二进制，不动数据目录**。90% 的"升级后崩了"是这三个原因之一：
-> ① 解压到了新文件夹，`serve` 模式默认数据目录 `./nylon-data` 是相对**启动时所在目录**的——换个地方启动就是一个空库（旧数据还在老地方，没丢）；
+> ① （v0.4.1 起已根治）解压到了新文件夹，旧版本 `serve` 默认数据目录 `./nylon-data` 相对**启动时所在目录**——换个地方启动就是一个空库（旧数据还在老地方，没丢）。v0.4.1 起：`./nylon-data` 存在才沿用，否则落到 `~/.nylonme/data` 并打警告，不再静默起空库；
 > ② 直接覆盖**正在运行**的 `nylon-engine.exe`（Windows 会报"文件被占用"，或旧进程没退导致 50051/50052 端口冲突起不来）；
 > ③ 启动脚本/环境变量（`NYLON_DATA_DIR`、`NYLON_EMBED_URL`、`NYLON_LLM_API_KEY`…）留在了旧目录里没跟过来。
 > 正确姿势见下面 5 步清单。数据格式跨版本兼容（快照 `SNP0` 魔数校验 + WAL CRC 自愈合），**不需要导出导入**。
@@ -18,7 +18,7 @@ require an export/import cycle.
 
 | Symptom | Root cause |
 |---|---|
-| Console opens but all memories are gone | `serve` mode defaults to `NYLON_DATA_DIR=./nylon-data`, **relative to the working directory you start the exe from**. Unzipping the new release to a new folder (e.g. `nylonme-windows-x64 (1)/`) and launching there starts a fresh, empty store. Your old data is still sitting in the old folder — nothing was deleted. |
+| Console opens but all memories are gone | `serve` mode used to default to `NYLON_DATA_DIR=./nylon-data`, **relative to the working directory you start the exe from**. Unzipping the new release to a new folder (e.g. `nylonme-windows-x64 (1)/`) and launching there starts a fresh, empty store. Your old data is still sitting in the old folder — nothing was deleted. **Since v0.4.1 this is fixed in code**: `./nylon-data` is only used when it already exists; otherwise the engine falls back to `~/.nylonme/data` (same as MCP mode) and prints a startup warning. |
 | New exe won't start / port error | The old engine process is still running. Windows refuses to overwrite a running exe, and a second instance can't bind :50051/:50052. |
 | Weave/resonate silently degraded | `NYLON_EMBED_URL`, `NYLON_LLM_API_KEY` etc. were set in a launcher script or shell session in the old folder and didn't carry over. |
 | DSH plugin logs "engine unreachable" | The plugin only talks HTTP to `config.url` (default `http://127.0.0.1:50052`). If the engine failed to start for any reason above, the plugin reports it as a crash — but the plugin itself is fine. |
@@ -30,8 +30,9 @@ require an export/import cycle.
    `netstat -ano | findstr :50051`.
 2. **Find your data directory.** The engine prints it on startup:
    `nylon-engine gRPC listening on ... (data=<path>, ...)`. If you never set
-   `NYLON_DATA_DIR`, it is `nylon-data\` under whatever directory you launched
-   the exe from.
+   `NYLON_DATA_DIR`: v0.4.0 and earlier used `nylon-data\` under whatever
+   directory you launched the exe from; v0.4.1+ uses that legacy directory
+   only when it already exists, otherwise `~/.nylonme/data`.
 3. **Back it up** (one copy, ten seconds):
    `xcopy /E /I nylon-data nylon-data.bak-pre-v0.3.6`
 4. **Replace only the binaries.** Extract the new zip *into the same folder*

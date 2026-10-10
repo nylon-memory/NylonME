@@ -7,6 +7,7 @@ mod audit;
 mod auth;
 mod http;
 mod mcp;
+mod paths;
 mod service;
 mod tls;
 
@@ -116,7 +117,21 @@ fn main() {
             .get(2)
             .cloned()
             .unwrap_or_else(|| "127.0.0.1:50051".into());
-        let data = std::env::var("NYLON_DATA_DIR").unwrap_or_else(|_| "./nylon-data".into());
+        let data = match paths::resolve_serve_data_dir(
+            std::env::var("NYLON_DATA_DIR").ok(),
+            std::path::Path::new("."),
+            paths::home_dir(),
+        ) {
+            paths::ServeDataDir::Explicit(d) => d,
+            paths::ServeDataDir::LegacyCwd(d) => {
+                eprintln!(
+                    "[warn] 未设 NYLON_DATA_DIR，沿用 ./nylon-data（相对启动目录）。\
+                     建议设为固定绝对路径，避免换目录启动后读到空库（见 docs/UPGRADE.md）"
+                );
+                d
+            }
+            paths::ServeDataDir::Home(d) => d,
+        };
         let dims: usize = std::env::var("NYLON_EMBED_DIMS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -224,9 +239,7 @@ fn main() {
             .and_then(|v| v.parse().ok())
             .unwrap_or(service::DEFAULT_EMBED_DIMS);
         let data = std::env::var("NYLON_DATA_DIR").unwrap_or_else(|_| {
-            let home = std::env::var("USERPROFILE")
-                .or_else(|_| std::env::var("HOME"))
-                .unwrap_or_else(|_| ".".into());
+            let home = paths::home_dir().unwrap_or_else(|| ".".into());
             format!("{home}/.nylonme/data")
         });
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
