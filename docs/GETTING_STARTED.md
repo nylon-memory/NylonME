@@ -256,3 +256,35 @@ nylon-engine keys revoke nyl_aaa                                   # by key or u
 Scopes: `read` (resonate/search/get), `write` (read + weave), `admin` (write + wildcard `"*"` tenant). Each key is bound to one tenant; a request whose `tenant_id` doesn't match the key is rejected. Clients pass the key as gRPC metadata `x-api-key`, or HTTP header `x-api-key: <key>` / `Authorization: Bearer <key>`. The MCP bridge and `nylon_cli` forward `NYLON_API_KEY` automatically.
 
 The `--name` alias attaches a member identity to a key: with `NYLON_AUDIT=1` every audit event carries `actor=alice`, so you can see per-person activity (`GET /v1/audit?actor=alice`) instead of anonymous key traffic. Admins can also manage keys over REST — `GET /v1/keys` (masked list), `POST /v1/keys` with `{"tenant","scope","name"}` (full key returned exactly once), `DELETE /v1/keys/{prefix}` — and the web console's **Team** tab wraps this with issue/revoke buttons and a per-member activity panel. Enable the audit stream on the server with `NYLON_AUDIT=1` (append-only `data/audit.jsonl` by default).
+
+## TLS (encrypted transport, off by default)
+
+Set two env vars and **both** the gRPC port and the HTTP/UI gateway switch to TLS — no nginx/Caddy in front required:
+
+```bash
+export NYLON_TLS_CERT=/etc/nylonme/tls/server.pem   # PEM certificate chain
+export NYLON_TLS_KEY=/etc/nylonme/tls/server.key    # PEM private key
+nylon-engine serve 0.0.0.0:50051
+# -> "TLS 已启用（L2.5，证书 ...）"
+# -> gRPC listening on 0.0.0.0:50051 (grpcs, ...)
+# -> HTTP/UI listening on https://0.0.0.0:50052 (TLS, L2.5)
+```
+
+Both variables must be set together (setting only one is a startup error — no half-encrypted state). Not setting them keeps the previous plaintext behavior, which is acceptable when the engine only listens on loopback. A quick self-signed certificate for a LAN deployment:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -keyout server.key -out server.pem \
+  -subj "/CN=192.168.1.5" -addext "subjectAltName=IP:192.168.1.5,DNS:nylonme.lan"
+```
+
+Clients opt into TLS by using an `https://` URL:
+
+```bash
+# MCP remote bridge / Python SDK
+export NYLON_SERVER="https://192.168.1.5:50051"
+# self-signed only: trust your CA (here: the server.pem above acts as its own CA)
+export NYLON_TLS_CA=/path/to/server.pem
+```
+
+The web console works as-is — browse to `https://host:50052` and accept the certificate warning once for self-signed certs. The DSH plugin takes the same `https://` base URL; if Node's fetch does not pick up a self-signed CA on your version, install the CA into the OS trust store or set `NODE_EXTRA_CA_CERTS`. Plaintext clients hitting a TLS port fail at handshake (by design); TLS clients hitting a plaintext port likewise — the scheme and the server config must match.

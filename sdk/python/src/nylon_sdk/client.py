@@ -7,6 +7,11 @@ Endpoint and scoping defaults follow the CLI/MCP conventions:
     NYLON_SERVER  (default "127.0.0.1:50051")
     NYLON_OWNER   (default "default")
     NYLON_TENANT  (default "default")
+
+TLS (L2.5): use an ``https://`` prefixed NYLON_SERVER/target to enable TLS.
+For self-signed certificates set NYLON_TLS_CA (or the ``tls_ca`` argument) to
+the CA PEM file. If the certificate's SAN does not match the dial target,
+pass ``("grpc.ssl_target_name_override", "<name>")`` in channel_options.
 """
 
 from __future__ import annotations
@@ -35,12 +40,47 @@ from .types import (
 DEFAULT_TARGET = "127.0.0.1:50051"
 
 
+def _parse_target(target: str) -> tuple[str, bool]:
+    """Return (host:port, use_tls). Bare host:port stays plaintext (back-compat)."""
+    if target.startswith("https://"):
+        return target[len("https://"):], True
+    if target.startswith("http://"):
+        return target[len("http://"):], False
+    return target, False
+
+
 def _normalize_target(target: str) -> str:
-    # Accept "host:port" or "http(s)://host:port" (matches NYLON_SERVER docs).
-    for scheme in ("https://", "http://"):
-        if target.startswith(scheme):
-            return target[len(scheme):]
-    return target
+    return _parse_target(target)[0]
+
+
+def _resolve_tls_ca(tls_ca: Optional[str]) -> Optional[str]:
+    return tls_ca or os.environ.get("NYLON_TLS_CA") or None
+
+
+def _sync_channel(target: str, tls_ca: Optional[str], options: Optional[Sequence]):
+    hostport, use_tls = _parse_target(target)
+    if use_tls:
+        root = None
+        ca = _resolve_tls_ca(tls_ca)
+        if ca:
+            with open(ca, "rb") as f:
+                root = f.read()
+        creds = grpc.ssl_channel_credentials(root_certificates=root)
+        return grpc.secure_channel(hostport, creds, options=options), hostport
+    return grpc.insecure_channel(hostport, options=options), hostport
+
+
+def _aio_channel(target: str, tls_ca: Optional[str], options: Optional[Sequence]):
+    hostport, use_tls = _parse_target(target)
+    if use_tls:
+        root = None
+        ca = _resolve_tls_ca(tls_ca)
+        if ca:
+            with open(ca, "rb") as f:
+                root = f.read()
+        creds = grpc.ssl_channel_credentials(root_certificates=root)
+        return grpc.aio.secure_channel(hostport, creds, options=options), hostport
+    return grpc.aio.insecure_channel(hostport, options=options), hostport
 
 
 def _context(
@@ -143,14 +183,13 @@ class NylonClient:
         tenant: Optional[str] = None,
         timeout: float = 30.0,
         channel_options: Optional[Sequence] = None,
+        tls_ca: Optional[str] = None,
     ) -> None:
-        self.target = _normalize_target(
-            target or os.environ.get("NYLON_SERVER") or DEFAULT_TARGET
-        )
+        raw = target or os.environ.get("NYLON_SERVER") or DEFAULT_TARGET
+        self._channel, self.target = _sync_channel(raw, tls_ca, channel_options)
         self.owner = owner or os.environ.get("NYLON_OWNER") or "default"
         self.tenant = tenant or os.environ.get("NYLON_TENANT") or "default"
         self.timeout = timeout
-        self._channel = grpc.insecure_channel(self.target, options=channel_options)
         self._stub = pb_grpc.MemoryEngineStub(self._channel)
 
     def __enter__(self) -> "NylonClient":
@@ -287,14 +326,13 @@ class AsyncNylonClient:
         tenant: Optional[str] = None,
         timeout: float = 30.0,
         channel_options: Optional[Sequence] = None,
+        tls_ca: Optional[str] = None,
     ) -> None:
-        self.target = _normalize_target(
-            target or os.environ.get("NYLON_SERVER") or DEFAULT_TARGET
-        )
+        raw = target or os.environ.get("NYLON_SERVER") or DEFAULT_TARGET
+        self._channel, self.target = _aio_channel(raw, tls_ca, channel_options)
         self.owner = owner or os.environ.get("NYLON_OWNER") or "default"
         self.tenant = tenant or os.environ.get("NYLON_TENANT") or "default"
         self.timeout = timeout
-        self._channel = grpc.aio.insecure_channel(self.target, options=channel_options)
         self._stub = pb_grpc.MemoryEngineStub(self._channel)
 
     async def __aenter__(self) -> "AsyncNylonClient":

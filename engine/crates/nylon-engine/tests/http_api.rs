@@ -12,6 +12,10 @@ mod http;
 mod mcp;
 #[path = "../src/service.rs"]
 mod service;
+
+#[path = "../src/tls.rs"]
+mod tls;
+
 use nylon_storage::PersistentGraph;
 use serde_json::{json, Value};
 use service::EngineService;

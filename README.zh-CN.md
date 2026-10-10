@@ -81,7 +81,7 @@ key 可以挂**成员别名**（`nylon-engine keys add --name alice`）：之后
 
 审计事件流（L2.3）由 `NYLON_AUDIT` 开关控制，`GET /v1/audit`（可加 `?actor=alice` 过滤）查询谁在用、谁在刷。
 
-安全模型见 [SECURITY.md](SECURITY.md)：诚实说明当前保护边界（静态数据与传输默认明文）、部署加固清单、以及 TLS（L2.5）/ 静态加密（L2.6）路线图。
+安全模型见 [SECURITY.md](SECURITY.md)：诚实说明当前保护边界（静态数据明文落盘；传输默认明文、可用 `NYLON_TLS_CERT`/`NYLON_TLS_KEY` 开启内置 TLS，即 L2.5）、部署加固清单、以及静态加密（L2.6）路线图。
 
 ## Python SDK
 

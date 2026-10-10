@@ -13,11 +13,14 @@ nylon-storage = { path = "../nylon-storage" }
 nylon-embed = { path = "../nylon-embed" }
 nylon-llm = { path = "../nylon-llm" }
 async-trait = "0.1"
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 tonic-prost = "0.14"
 prost = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
+# L2.5 TLS：ring provider（aws-lc-rs 在 x86_64-pc-windows-gnu 下无法构建）
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
 rmcp = { version = "3.1.2", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -28,6 +31,8 @@ tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
 tempfile = "3"
+rcgen = "0.13"
+tokio = { version = "1", features = ["io-util"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

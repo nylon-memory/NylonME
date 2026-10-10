@@ -338,7 +338,7 @@ impl EngineService {
                 if n.embedding.len() == embed_dims {
                     index.add(id, &n.embedding);
                     restored += 1;
-                    if restored % 50000 == 0 {
+                    if restored.is_multiple_of(50000) {
                         println!("[engine] HNSW 回填进度 {restored}");
                     }
                 }

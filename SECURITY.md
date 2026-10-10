@@ -14,7 +14,7 @@ precise than marketed for being vague.
 | API-key auth (L2.2) | Three tiers `read < write < admin`; keys hashed at rest in `api-keys.json`; per-key tenant coverage | ✅ built-in (off by default) |
 | Audit stream (L2.3) | Append-only `audit.jsonl` of who did what, including denied attempts | ✅ built-in (`NYLON_AUDIT`) |
 | Snapshots & backup (L2.4) | CRC-verified WAL with self-healing truncation, periodic checkpoint, hot-backup friendly | ✅ built-in |
-| Transport encryption (L2.5) | TLS for gRPC + HTTP/UI/MCP | 🗓 roadmap v0.4.0 |
+| Transport encryption (L2.5) | TLS for gRPC + HTTP/UI/MCP | ✅ on main (`NYLON_TLS_CERT`/`NYLON_TLS_KEY`, off by default) |
 | At-rest encryption (L2.6) | Envelope encryption of snapshot + WAL + audit | 🗓 roadmap v0.4.0 |
 
 ## What is *not* protected today — read this before deploying
@@ -25,9 +25,11 @@ are raw `f32` vectors. Anyone who can read these files — another OS user, a
 backup that wandered off, a stolen unencrypted disk, a hosting provider — can
 read every stored memory.
 
-**Transport is plaintext by default.** gRPC (:50051) and HTTP/UI/MCP (:50052)
-are unencrypted. API keys travel as cleartext `x-api-key` headers. On a trusted
-LAN this is a calculated default; anywhere else it is not acceptable.
+**Transport is plaintext by default, TLS optional.** gRPC (:50051) and
+HTTP/UI/MCP (:50052) are unencrypted unless you set `NYLON_TLS_CERT` +
+`NYLON_TLS_KEY` (both together — see docs/GETTING_STARTED.md "TLS"). Without
+TLS, API keys travel as cleartext `x-api-key` headers. On a trusted LAN the
+plaintext default is a calculated choice; anywhere else, turn TLS on.
 
 ## Threat model
 
@@ -36,7 +38,7 @@ LAN this is a calculated default; anywhere else it is not acceptable.
 | Process under a *different* OS account on the same host | ✅ | File permissions — keep the data dir `700`/service-account-only |
 | Stolen laptop / decommissioned disk | ⚠️ only if OS-level | Full-disk encryption (BitLocker / LUKS / FileVault). This is the industry-standard answer (it is also PostgreSQL's entire answer) |
 | Backup file leaks (copied data dir, off-site copies) | ❌ | Treat backups as sensitive as the live data; encrypt the backup target; L2.6 will cover this natively |
-| LAN eavesdropper (rogue device on the network) | ❌ | Keep the engine on a trusted segment; put it behind a TLS-terminating reverse proxy (Caddy/nginx) if the segment is shared; L2.5 will make this one env var |
+| LAN eavesdropper (rogue device on the network) | ✅ opt-in | Set `NYLON_TLS_CERT`/`NYLON_TLS_KEY` (L2.5); or keep the engine on a trusted segment |
 | Cloud/hosting provider reading the disk | ❌ | L2.6 (envelope encryption with externalized keys) is the real answer; until then, self-host on hardware you control |
 | Malware running as the *same* OS user as the engine | ❌ | **No at-rest scheme fixes this** — the engine holds plaintext in memory and its key must be reachable. Oracle, SQL Server, and MySQL all share this boundary; anyone who claims otherwise is selling theater |
 | A valid API key holder reading another tenant | ✅ | L2.1 isolation + per-key tenant coverage (L2.2) |
@@ -51,9 +53,9 @@ LAN this is a calculated default; anywhere else it is not acceptable.
    sync folders.
 4. **Keys**: prefer `NYLON_API_KEYS_FILE` over inline env vars (process
    listings leak env). Rotate issued keys; revoke leavers.
-5. **Network**: bind to localhost or a trusted interface. If the engine must
-   be reachable beyond a trusted LAN *today*, front it with Caddy/nginx
-   terminating TLS — one `reverse_proxy` line.
+5. **Network**: bind to localhost or a trusted interface. Beyond a trusted
+   LAN, enable built-in TLS (`NYLON_TLS_CERT`/`NYLON_TLS_KEY`); a TLS-
+   terminating Caddy/nginx in front also works if you prefer one.
 6. **Upgrades**: follow [docs/UPGRADE.md](docs/UPGRADE.md) so the data dir
    never accidentally lands somewhere with loose permissions.
 

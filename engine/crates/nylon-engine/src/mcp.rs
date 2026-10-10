@@ -26,20 +26,28 @@ pub struct RemoteEngine {
 
 impl RemoteEngine {
     /// 连接远端引擎；接受 "host:port" 或 "http(s)://host:port"（与 SDK/CLI 约定一致）。
+    /// https:// 走 TLS（L2.5）：自签证书设 NYLON_TLS_CA 指向 CA PEM，缺省用系统/WebPKI 根。
     /// api_key：远端开启鉴权时随每个请求写入 x-api-key metadata。
     pub async fn connect(
         target: &str,
         api_key: Option<String>,
-    ) -> Result<Self, tonic::transport::Error> {
-        let t = target
-            .strip_prefix("http://")
-            .or_else(|| target.strip_prefix("https://"))
-            .unwrap_or(target);
-        let url = format!("http://{t}");
-        Ok(Self {
-            client: pb::memory_engine_client::MemoryEngineClient::connect(url).await?,
-            api_key,
-        })
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let client = if let Some(rest) = target.strip_prefix("https://") {
+            let mut endpoint = tonic::transport::Endpoint::from_shared(format!("https://{rest}"))?;
+            let mut tls_cfg = tonic::transport::ClientTlsConfig::new();
+            if let Ok(ca_path) = std::env::var("NYLON_TLS_CA") {
+                let pem = std::fs::read(&ca_path).map_err(|e| {
+                    std::io::Error::new(e.kind(), format!("读取 NYLON_TLS_CA={ca_path} 失败: {e}"))
+                })?;
+                tls_cfg = tls_cfg.ca_certificate(tonic::transport::Certificate::from_pem(pem));
+            }
+            endpoint = endpoint.tls_config(tls_cfg)?;
+            pb::memory_engine_client::MemoryEngineClient::connect(endpoint).await?
+        } else {
+            let t = target.strip_prefix("http://").unwrap_or(target);
+            pb::memory_engine_client::MemoryEngineClient::connect(format!("http://{t}")).await?
+        };
+        Ok(Self { client, api_key })
     }
 
     /// 转发前附加鉴权 metadata。

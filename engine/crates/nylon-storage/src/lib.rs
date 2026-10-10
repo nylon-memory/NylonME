@@ -40,7 +40,11 @@ impl PersistentGraph {
         eprintln!("[persist] snapshot 加载完成 ({:?})", t0.elapsed());
         let t1 = std::time::Instant::now();
         let (wal, ops) = Wal::open(&dir)?;
-        eprintln!("[persist] WAL 解析完成：{} 条 op ({:?})", ops.len(), t1.elapsed());
+        eprintln!(
+            "[persist] WAL 解析完成：{} 条 op ({:?})",
+            ops.len(),
+            t1.elapsed()
+        );
         let t2 = std::time::Instant::now();
         let n = ops.len();
         for (i, op) in ops.into_iter().enumerate() {

@@ -38,6 +38,12 @@ spec:
               value: {{ .Values.engine.audit | quote }}
             - name: NYLON_CHECKPOINT_SECS
               value: {{ .Values.engine.checkpointSecs | quote }}
+            {{- if and .Values.engine.tlsCert .Values.engine.tlsKey }}
+            - name: NYLON_TLS_CERT
+              value: {{ .Values.engine.tlsCert | quote }}
+            - name: NYLON_TLS_KEY
+              value: {{ .Values.engine.tlsKey | quote }}
+            {{- end }}
             - name: NYLON_EMBED_URL
               value: {{ include "nylonme.embedUrl" . }}
             - name: NYLON_EMBED_MODEL

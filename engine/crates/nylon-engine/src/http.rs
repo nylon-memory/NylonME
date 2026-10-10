@@ -682,8 +682,69 @@ pub fn router(svc: EngineService) -> Router {
 }
 
 /// 启动 HTTP 网关（REST + Web UI）。与 gRPC 服务并行运行。
-pub async fn serve(svc: EngineService, addr: &str) -> std::io::Result<()> {
+/// tls 为 Some 时走 rustls（L2.5）；单个握手失败不杀死 accept 循环。
+pub async fn serve(
+    svc: EngineService,
+    addr: &str,
+    tls: Option<crate::tls::TlsMaterial>,
+) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("nylon-engine HTTP/UI listening on http://{addr}");
-    axum::serve(listener, router(svc)).await
+    serve_on(listener, svc, tls).await
+}
+
+/// 在已绑定的 listener 上启动 HTTP 网关（测试可传 0 端口后读 local_addr）。
+pub async fn serve_on(
+    listener: tokio::net::TcpListener,
+    svc: EngineService,
+    tls: Option<crate::tls::TlsMaterial>,
+) -> std::io::Result<()> {
+    match tls {
+        None => {
+            println!(
+                "nylon-engine HTTP/UI listening on http://{}",
+                listener.local_addr()?
+            );
+            axum::serve(listener, router(svc)).await
+        }
+        Some(t) => {
+            let config = t.rustls_server_config()?;
+            let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+            println!(
+                "nylon-engine HTTP/UI listening on https://{} (TLS, L2.5)",
+                listener.local_addr()?
+            );
+            axum::serve(TlsListener { listener, acceptor }, router(svc)).await
+        }
+    }
+}
+
+/// axum 0.8 的自定义 Listener：TCP accept 后包一层 TLS 握手。
+/// 明文探测/坏客户端只打日志，循环继续，避免单连接打死整个网关。
+struct TlsListener {
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.listener.accept().await {
+                Ok((stream, addr)) => match self.acceptor.accept(stream).await {
+                    Ok(tls) => return (tls, addr),
+                    Err(e) => eprintln!("[tls] 握手失败（{addr}）: {e}"),
+                },
+                Err(e) => {
+                    eprintln!("[tls] accept 失败: {e}");
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.listener.local_addr()
+    }
 }

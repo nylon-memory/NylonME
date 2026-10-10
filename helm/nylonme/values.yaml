@@ -23,6 +23,10 @@ engine:
   audit: "on"
   # 周期 checkpoint 秒数（0 = 关闭自动 checkpoint）
   checkpointSecs: "600"
+  # TLS（L2.5）：证书/私钥 PEM 挂载路径（用 extraVolumes/extraMounts 挂 Secret 后填这里；
+  # 两个都填才启用，只填一个是启动错误）
+  tlsCert: ""  # 例 /etc/nylonme/tls/tls.crt
+  tlsKey: ""   # 例 /etc/nylonme/tls/tls.key
   # 额外 tuning 环境变量（见 README Tuning 表），原样注入
   extraEnv: {}
   # 例：

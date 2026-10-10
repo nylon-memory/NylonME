@@ -81,7 +81,7 @@ Keys can carry a **member alias** (`nylon-engine keys add --name alice`): every 
 
 An audit event stream (L2.3) is gated by `NYLON_AUDIT`; query `GET /v1/audit` (optionally `?actor=alice`) to see who is using and who is hammering the engine.
 
-See [SECURITY.md](SECURITY.md) for the honest security model: what is protected today (and what is not — plaintext at rest and in transport by default), deployment hardening, and the TLS (L2.5) / at-rest encryption (L2.6) roadmap.
+See [SECURITY.md](SECURITY.md) for the honest security model: what is protected today (and what is not — plaintext at rest; transport is plaintext by default with built-in TLS available via `NYLON_TLS_CERT`/`NYLON_TLS_KEY`, L2.5), deployment hardening, and the at-rest encryption (L2.6) roadmap.
 
 ## Python SDK
 
