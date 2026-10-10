@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nylon-sdk"
-version = "0.2.3"
+version = "0.2.4"
 description = "Official Python client for the NylonME memory engine"
 readme = "README.md"
 requires-python = ">=3.10"
