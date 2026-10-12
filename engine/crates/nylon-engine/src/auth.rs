@@ -191,6 +191,10 @@ impl ApiKeys {
         self.grants.read().unwrap().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.grants.read().unwrap().is_empty()
+    }
+
     /// key 表文件路径（文件源时 Some；内联 JSON 配置时 None——
     /// REST key 管理 API 仅在文件源下可用）。
     pub fn file_path(&self) -> Option<std::path::PathBuf> {

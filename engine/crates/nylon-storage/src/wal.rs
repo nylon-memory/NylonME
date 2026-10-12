@@ -9,6 +9,7 @@
 //! 调用方在应答客户端前等待自己最后一张票据，持久化语义不变；
 //! 但内存图可能短暂超前于已刷盘状态（未等票的读会看到尚未持久化的数据）。
 //! 读取器进程崩溃只会丢失“未应答”的写入，与客户端观察一致。
+use crate::cipher::{encrypted_store_error, StorageCipher, WAL_MAGIC_ENC};
 use crate::crc32::crc32;
 use nylon_core::{decode_nodes, encode_nodes, MemoryNode};
 use std::fs::{File, OpenOptions};
@@ -186,23 +187,48 @@ enum WalMsg {
     Truncate { ack: Ack },
 }
 
-fn frame(op: &WalOp) -> Vec<u8> {
-    let payload = encode_op(op);
+fn frame(op: &WalOp, cipher: Option<&dyn StorageCipher>) -> io::Result<Vec<u8>> {
+    let plain = encode_op(op);
+    let payload = match cipher {
+        None => plain,
+        Some(c) => c.seal(&plain)?,
+    };
     let mut rec = Vec::with_capacity(payload.len() + 8);
     rec.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     rec.extend_from_slice(&crc32(&payload).to_le_bytes());
     rec.extend_from_slice(&payload);
-    rec
+    Ok(rec)
 }
 
 /// 重放全部有效记录；在第一条损坏/不完整记录处截断文件并返回已验证的前缀。
-fn replay_file(file: &mut File) -> io::Result<Vec<WalOp>> {
+/// 加密模式（WALE 文件头）下 payload 先过 cipher.open 再解码；
+/// CRC 依然算在密封块上（介质完整性），AEAD tag 负责真实性——
+/// 解密失败视同损坏，截断自愈语义不变。
+fn replay_file(file: &mut File, cipher: Option<&dyn StorageCipher>) -> io::Result<Vec<WalOp>> {
     let mut buf = Vec::new();
     file.seek(SeekFrom::Start(0))?;
     file.read_to_end(&mut buf)?;
+    let encrypted = buf.len() >= 4 && &buf[..4] == WAL_MAGIC_ENC;
+    match (encrypted, cipher.is_some()) {
+        // 明文引擎读加密库：明确报错，绝不走到截断（防误毁数据）
+        (true, false) => return Err(encrypted_store_error("WAL wal.log")),
+        // 加密引擎读明文旧库：拒绝静默写明文，提示迁移
+        (false, true) if !buf.is_empty() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "WAL wal.log 为明文格式，但引擎已启用静态加密（L2.6）：\
+                 请先运行 storage-encrypt 迁移工具（见企业版部署手册）",
+            ))
+        }
+        _ => {}
+    }
+    let mut pos = if buf.len() >= 4 && &buf[..4] == WAL_MAGIC_ENC {
+        4usize
+    } else {
+        0usize
+    };
     let mut ops = Vec::new();
-    let mut pos = 0usize;
-    let mut valid_end = 0usize;
+    let mut valid_end = pos; // 加密模式下损坏截断也要保住 4 字节文件头
     while pos + 8 <= buf.len() {
         let len = u32::from_le_bytes(buf[pos..pos + 4].try_into().unwrap()) as usize;
         let crc = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap());
@@ -213,7 +239,14 @@ fn replay_file(file: &mut File) -> io::Result<Vec<WalOp>> {
         if crc32(payload) != crc {
             break; // CRC 不匹配：损坏
         }
-        match decode_op(payload) {
+        let decoded = match cipher {
+            None => decode_op(payload),
+            Some(c) => match c.open(payload) {
+                Ok(p) => decode_op(&p),
+                Err(_) => break, // 解密失败：损坏或密钥错，截断
+            },
+        };
+        match decoded {
             Some(op) => ops.push(op),
             None => break,
         }
@@ -227,13 +260,22 @@ fn replay_file(file: &mut File) -> io::Result<Vec<WalOp>> {
     Ok(ops)
 }
 
-fn writer_loop(mut file: File, fsync: bool, rx: Receiver<WalMsg>) {
+/// header：加密模式为 WALE 文件头，明文为空 Vec；truncate 后必须重写文件头，
+/// 否则重开时会被误判成明文旧库（或更糟）。
+fn writer_loop(mut file: File, fsync: bool, rx: Receiver<WalMsg>, header: Vec<u8>) {
     while let Ok(first) = rx.recv() {
         match first {
             WalMsg::Truncate { ack } => {
                 let r = file
                     .set_len(0)
                     .and_then(|_| file.seek(SeekFrom::Start(0)))
+                    .and_then(|_| {
+                        if header.is_empty() {
+                            Ok(())
+                        } else {
+                            file.write_all(&header)
+                        }
+                    })
                     .and_then(|_| file.sync_all());
                 ack.reply(r);
             }
@@ -252,6 +294,13 @@ fn writer_loop(mut file: File, fsync: bool, rx: Receiver<WalMsg>) {
                             let r = file
                                 .set_len(0)
                                 .and_then(|_| file.seek(SeekFrom::Start(0)))
+                                .and_then(|_| {
+                                    if header.is_empty() {
+                                        Ok(())
+                                    } else {
+                                        file.write_all(&header)
+                                    }
+                                })
                                 .and_then(|_| file.sync_all());
                             ack.reply(r);
                         }
@@ -295,6 +344,7 @@ fn flush(file: &mut File, fsync: bool, frames: &mut Vec<Vec<u8>>, acks: &mut Vec
 pub struct Wal {
     tx: Option<Sender<WalMsg>>,
     handle: Option<JoinHandle<()>>,
+    cipher: Option<Arc<dyn StorageCipher>>,
 }
 
 impl Wal {
@@ -303,6 +353,17 @@ impl Wal {
     /// 诊断旋钮 `NYLON_WAL_NO_FSYNC=1` 可关闭 fsync，仅用于基准 profiling（区分
     /// fsync 成本），生产环境严禁使用。
     pub fn open(dir: &Path) -> io::Result<(Wal, Vec<WalOp>)> {
+        Self::open_with(dir, None)
+    }
+
+    /// 打开并注入静态加密实现（L2.6 企业版）。
+    /// 新文件 + cipher → 写 `WALE` 文件头进入加密模式；
+    /// 已有 `WALE` 文件 + 无 cipher → 报错（社区版不误读）；
+    /// 明文旧文件 + cipher → 报错并提示先迁移（拒绝静默写明文）。
+    pub fn open_with(
+        dir: &Path,
+        cipher: Option<Arc<dyn StorageCipher>>,
+    ) -> io::Result<(Wal, Vec<WalOp>)> {
         let path = dir.join(WAL_FILE);
         let mut file = OpenOptions::new()
             .read(true)
@@ -310,17 +371,29 @@ impl Wal {
             .create(true)
             .truncate(false)
             .open(path)?;
-        let ops = replay_file(&mut file)?;
+        // 全新空文件 + 加密模式：先写文件头再重放（重放里做魔数/密钥一致性校验）
+        let is_empty = file.metadata()?.len() == 0;
+        if is_empty && cipher.is_some() {
+            file.write_all(WAL_MAGIC_ENC)?;
+            file.sync_all()?;
+        }
+        let ops = replay_file(&mut file, cipher.as_deref())?;
         file.seek(SeekFrom::End(0))?;
         let fsync = std::env::var_os("NYLON_WAL_NO_FSYNC").is_none();
         let (tx, rx) = channel();
+        let header = if cipher.is_some() {
+            WAL_MAGIC_ENC.to_vec()
+        } else {
+            Vec::new()
+        };
         let handle = std::thread::Builder::new()
             .name("nylon-wal-writer".into())
-            .spawn(move || writer_loop(file, fsync, rx))?;
+            .spawn(move || writer_loop(file, fsync, rx, header))?;
         Ok((
             Wal {
                 tx: Some(tx),
                 handle: Some(handle),
+                cipher,
             },
             ops,
         ))
@@ -331,7 +404,7 @@ impl Wal {
         let (ack, ticket) = Ack::pair();
         let tx = self.tx.as_ref().expect("wal open");
         tx.send(WalMsg::Append {
-            frame: frame(op),
+            frame: frame(op, self.cipher.as_deref())?,
             ack,
         })
         .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "wal 写线程已退出"))?;

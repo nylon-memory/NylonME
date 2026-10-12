@@ -6,6 +6,7 @@
 //! - 启动时从 JSONL 尾部预载最近事件，重启后 UI 不留白；
 //! - `NYLON_AUDIT=off` 整体关闭；文件轮转留给后续版本（当前 JSONL 单调追加）。
 
+use nylon_storage::cipher::{self, StorageCipher};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::Write;
@@ -42,27 +43,73 @@ impl Audit {
     /// 启动审计流：JSONL 落在数据目录 audit.jsonl。
     /// `NYLON_AUDIT=off` 时返回 None（完全关闭）。
     pub fn start(data_dir: &Path) -> Option<Self> {
+        Self::start_with(data_dir, None)
+    }
+
+    /// 启动审计流并注入静态加密实现（L2.6 企业版）：
+    /// 加密文件的 JSONL 行以 base64(密封块) 落盘，首行 `# NYLE1` 标记。
+    /// 格式与 cipher 不匹配时降级为仅内存环形缓冲（审计故障不阻断服务，但打醒目警告）。
+    pub fn start_with(data_dir: &Path, cipher: Option<Arc<dyn StorageCipher>>) -> Option<Self> {
         let disabled = std::env::var("NYLON_AUDIT")
             .map(|v| v == "off")
             .unwrap_or(false);
-        Self::start_inner(data_dir, disabled)
+        Self::start_inner(data_dir, disabled, cipher)
     }
 
     /// 与启动逻辑分离的开关（测试可直接驱动，避免进程级 env 竞态）。
-    fn start_inner(data_dir: &Path, disabled: bool) -> Option<Self> {
+    fn start_inner(
+        data_dir: &Path,
+        disabled: bool,
+        cipher: Option<Arc<dyn StorageCipher>>,
+    ) -> Option<Self> {
         if disabled {
             return None;
         }
         let path = data_dir.join("audit.jsonl");
-        let recent = Arc::new(Mutex::new(preload(&path, RING_CAP)));
+        // 模式判定：空文件按 cipher 决定写不写标记行；非空文件读首字节判格式
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let file_encrypted = cipher::jsonl_is_encrypted(&existing);
+        let mode_mismatch = cipher.is_some() != file_encrypted && !existing.is_empty();
+        if mode_mismatch {
+            eprintln!(
+                "[audit] 警告：audit.jsonl 格式与静态加密配置不一致（文件加密={file_encrypted}）——\
+                 审计持久化已禁用（内存环仍可用）。请检查 NYLON_STORAGE_CIPHER 配置或先迁移数据"
+            );
+        }
+        let persist = !mode_mismatch;
+        let recent = Arc::new(Mutex::new(preload(
+            &path,
+            RING_CAP,
+            if file_encrypted {
+                cipher.as_deref()
+            } else {
+                None
+            },
+        )));
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuditEvent>();
         let ring = Arc::clone(&recent);
         tokio::spawn(async move {
+            if !persist {
+                // 降级模式：只维护内存环，不落盘
+                while let Some(ev) = rx.recv().await {
+                    let mut g = ring.lock().unwrap_or_else(|p| p.into_inner());
+                    if g.len() >= RING_CAP {
+                        g.pop_front();
+                    }
+                    g.push_back(ev);
+                }
+                return;
+            }
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
                 .unwrap_or_else(|e| panic!("打开审计日志 {} 失败: {e}", path.display()));
+            if cipher.is_some() && existing.is_empty() {
+                use std::io::Write as _;
+                let _ = file.write_all(cipher::JSONL_MAGIC_ENC_LINE.as_bytes());
+                let _ = file.write_all(b"\n");
+            }
             let mut flush_tick = tokio::time::interval(std::time::Duration::from_secs(1));
             flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
@@ -70,8 +117,10 @@ impl Audit {
                     ev = rx.recv() => {
                         let Some(ev) = ev else { break };
                         if let Ok(line) = serde_json::to_string(&ev) {
-                            let _ = file.write_all(line.as_bytes());
-                            let _ = file.write_all(b"\n");
+                            if let Ok(line) = cipher::seal_jsonl_line(cipher.as_deref(), &line) {
+                                let _ = file.write_all(line.as_bytes());
+                                let _ = file.write_all(b"\n");
+                            }
                         }
                         let mut g = ring.lock().unwrap_or_else(|p| p.into_inner());
                         if g.len() >= RING_CAP {
@@ -129,7 +178,8 @@ impl Audit {
 }
 
 /// 启动预载：读文件尾部窗口，跳过第一条可能不完整的行，解析剩余 JSONL。
-fn preload(path: &Path, cap: usize) -> VecDeque<AuditEvent> {
+/// 加密文件（首行 `# NYLE1`）逐行过 cipher 解封后再解析。
+fn preload(path: &Path, cap: usize, cph: Option<&dyn StorageCipher>) -> VecDeque<AuditEvent> {
     let mut out = VecDeque::new();
     let Ok(meta) = std::fs::metadata(path) else {
         return out;
@@ -138,6 +188,18 @@ fn preload(path: &Path, cap: usize) -> VecDeque<AuditEvent> {
     if size == 0 {
         return out;
     }
+    // 加密文件的首行标记可能在窗口之外：单独读文件头判定
+    let encrypted = std::fs::File::open(path)
+        .ok()
+        .and_then(|mut f| {
+            use std::io::Read as _;
+            let mut head = [0u8; 64];
+            let n = f.read(&mut head).ok()?;
+            String::from_utf8(head[..n].to_vec())
+                .ok()
+                .map(|s| s.starts_with(cipher::JSONL_MAGIC_ENC_LINE))
+        })
+        .unwrap_or(false);
     let start = size.saturating_sub(PRELOAD_BYTES);
     let Ok(mut file) = std::fs::File::open(path) else {
         return out;
@@ -155,7 +217,16 @@ fn preload(path: &Path, cap: usize) -> VecDeque<AuditEvent> {
         if start > 0 && i == 0 {
             continue;
         }
-        if let Ok(ev) = serde_json::from_str::<AuditEvent>(line) {
+        if line.trim() == cipher::JSONL_MAGIC_ENC_LINE {
+            continue; // 标记行不是事件
+        }
+        let parsed = if encrypted {
+            cph.and_then(|c| cipher::open_jsonl_line(Some(c), line))
+                .and_then(|l| serde_json::from_str::<AuditEvent>(&l).ok())
+        } else {
+            serde_json::from_str::<AuditEvent>(line).ok()
+        };
+        if let Some(ev) = parsed {
             if out.len() >= cap {
                 out.pop_front();
             }
@@ -222,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn disabled_by_env() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(Audit::start_inner(dir.path(), true).is_none());
-        assert!(Audit::start_inner(dir.path(), false).is_some());
+        assert!(Audit::start_inner(dir.path(), true, None).is_none());
+        assert!(Audit::start_inner(dir.path(), false, None).is_some());
     }
 }

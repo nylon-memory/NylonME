@@ -2,15 +2,8 @@
 //! gRPC 服务化（tonic）为路线图 Week 3-4 任务，需先定义 proto codegen（见 proto/）。
 
 use nylon_core::{Filaments, MemoryNode, Tension};
+use nylon_engine::{audit, auth, mcp, paths, service};
 use nylon_graph::{ContextSpectrum, FilamentFilter, MemoryGraph, DEFAULT_BUDGET};
-mod audit;
-mod auth;
-mod http;
-mod mcp;
-mod paths;
-mod service;
-mod tls;
-
 use nylon_storage::PersistentGraph;
 use nylon_vector::{BruteForceIndex, VectorIndex};
 
@@ -103,6 +96,15 @@ fn keys_cli(args: &[String]) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // L2.6 静态加密为企业版功能：社区版二进制识别到配置就明确拒绝启动，
+    // 而不是静默忽略——静默会让用户误以为数据已加密，比报错更危险。
+    if std::env::var("NYLON_STORAGE_CIPHER").is_ok() {
+        eprintln!(
+            "NYLON_STORAGE_CIPHER 已设置，但静态加密（at-rest encryption）是企业版功能（L2.6），\
+             社区版不支持。为避免明文误存，引擎拒绝启动。请移除该环境变量，或联系获取企业版。"
+        );
+        std::process::exit(2);
+    }
     if args.get(1).map(|s| s.as_str()) == Some("genkey") {
         // 生成一把 API key；写入 NYLON_API_KEYS(_FILE) 后引擎才启用鉴权
         println!("{}", auth::generate_key());
@@ -137,79 +139,8 @@ fn main() {
             .and_then(|v| v.parse().ok())
             .unwrap_or(service::DEFAULT_EMBED_DIMS);
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        rt.block_on(async move {
-            let store = PersistentGraph::open(&data).expect("open persistent store");
-            let llm = nylon_llm::llm_from_env();
-            let embedder = nylon_embed::embedder_from_env(dims);
-            let keys = auth::ApiKeys::from_env();
-            if let Some(k) = &keys {
-                println!("API key 鉴权已启用（{} 把 key，L2.2）", k.len());
-            }
-            // L2.5 TLS：NYLON_TLS_CERT/KEY 同时设置才对 gRPC + HTTP 双栈启用；缺一直接退出
-            let tls = tls::from_env().unwrap_or_else(|e| {
-                eprintln!("TLS 配置错误: {e}");
-                std::process::exit(2);
-            });
-            if let Some(t) = &tls {
-                tls::validate(t).unwrap_or_else(|e| {
-                    eprintln!("TLS 证书/私钥无效: {e}");
-                    std::process::exit(2);
-                });
-                println!("TLS 已启用（L2.5，证书 {}）", t.cert_path());
-            }
-            let svc = service::EngineService::new(store, dims, embedder, llm)
-                .with_auth(keys.clone())
-                .with_audit(audit::Audit::start(std::path::Path::new(&data)));
-            // 嵌入通道启动探测（issue #4）：未配置/端点不可达都醒目提示，不再静默退化
-            svc.probe_embedder().await;
-            let sock = addr.parse().expect("invalid listen addr");
-            // HTTP 网关（REST + 社区版 Web UI）默认 127.0.0.1:50052，NYLON_HTTP_ADDR=off 关闭
-            let http_addr =
-                std::env::var("NYLON_HTTP_ADDR").unwrap_or_else(|_| "127.0.0.1:50052".into());
-            let scheme = if tls.is_some() { "grpcs" } else { "grpc" };
-            println!("nylon-engine gRPC listening on {addr} ({scheme}, data={data}, dims={dims})");
-            // 周期 checkpoint：快照落盘并截断 WAL，控制恢复重放量 + 支持热备份（L2.4）
-            let ckpt_secs: u64 = std::env::var("NYLON_CHECKPOINT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(600);
-            if ckpt_secs > 0 {
-                let svc_ckpt = svc.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(ckpt_secs)).await;
-                        match svc_ckpt.checkpoint("") {
-                            Ok(()) => println!("[checkpoint] 快照已落盘，WAL 已截断"),
-                            Err(e) => eprintln!("[checkpoint] 失败: {e}"),
-                        }
-                    }
-                });
-            }
-            let mut grpc_builder = tonic::transport::Server::builder();
-            if let Some(t) = &tls {
-                grpc_builder = grpc_builder
-                    .tls_config(
-                        tonic::transport::ServerTlsConfig::new().identity(t.tonic_identity()),
-                    )
-                    .expect("gRPC TLS 配置");
-            }
-            let grpc = grpc_builder
-                .add_service(
-                    service::pb::memory_engine_server::MemoryEngineServer::with_interceptor(
-                        svc.clone(),
-                        move |req: tonic::Request<()>| auth::grpc_intercept(&keys, req),
-                    ),
-                )
-                .serve(sock);
-            if http_addr == "off" {
-                grpc.await.expect("gRPC server");
-            } else {
-                let http = http::serve(svc, &http_addr, tls);
-                tokio::join!(async { grpc.await.expect("gRPC server") }, async {
-                    http.await.expect("http server")
-                },);
-            }
-        });
+        // 服务装配逻辑在库侧 run_serve_with：企业版二进制复用同一入口注入 cipher（L2.6）
+        rt.block_on(nylon_engine::run_serve_with(&addr, &data, dims, None));
         return;
     }
     if args.get(1).map(|s| s.as_str()) == Some("mcp") {
@@ -248,7 +179,8 @@ fn main() {
             let llm = nylon_llm::llm_from_env();
             let embedder = nylon_embed::embedder_from_env(dims);
             let svc = service::EngineService::new(store, dims, embedder, llm)
-                .with_audit(audit::Audit::start(std::path::Path::new(&data)));
+                .with_audit(audit::Audit::start(std::path::Path::new(&data)))
+                .with_cipher(None);
             if let Err(e) = mcp::run_stdio(svc).await {
                 eprintln!("mcp server error: {e}");
                 std::process::exit(1);

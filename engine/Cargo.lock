@@ -1000,6 +1000,7 @@ dependencies = [
 name = "nylon-storage"
 version = "0.4.1"
 dependencies = [
+ "base64 0.22.1",
  "nylon-core",
  "nylon-graph",
 ]

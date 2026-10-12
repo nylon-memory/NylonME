@@ -9,14 +9,18 @@
 //! Phase 1 的嵌入式持久化基线（ RocksDB 单层存储的等效自研替代），
 //! API 面向后续存储引擎演进保持稳定。
 
-mod crc32;
+pub mod cipher;
+// CRC32 实现公开：WAL 帧格式的完整性校验器，迁移/巡检工具需要复用同一算法。
+pub mod crc32;
 mod wal;
 
+pub use cipher::StorageCipher;
 use nylon_core::{decode_nodes, encode_nodes, MemoryNode};
 use nylon_graph::MemoryGraph;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 pub use wal::DurabilityTicket;
 use wal::{Wal, WalOp};
 
@@ -28,18 +32,35 @@ pub struct PersistentGraph {
     graph: MemoryGraph,
     wal: Wal,
     dir: PathBuf,
+    cipher: Option<Arc<dyn StorageCipher>>,
 }
 
 impl PersistentGraph {
     /// 打开（或创建）目录下的持久化图：先加载快照，再重放 WAL。
     pub fn open(dir: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with(dir, None)
+    }
+
+    /// 打开并注入静态加密实现（L2.6 企业版）。
+    /// cipher 为 Some 时：快照以 SNPE 落盘、WAL 以 WALE 文件头写加密帧；
+    /// 读到加密文件但未提供 cipher → 明确报错（社区版二进制不误读）。
+    /// cipher 存在但 WAL 是明文旧格式 → 报错并提示先跑 storage-encrypt 迁移，
+    /// 杜绝"以为加密了其实在写明文"。
+    pub fn open_with(
+        dir: impl AsRef<Path>,
+        cipher: Option<Arc<dyn StorageCipher>>,
+    ) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         fs::create_dir_all(&dir)?;
         let t0 = std::time::Instant::now();
-        let mut graph = load_snapshot(&dir.join(SNAPSHOT_FILE))?;
+        let mut graph = load_snapshot(&dir.join(SNAPSHOT_FILE), cipher.as_deref())?;
         eprintln!("[persist] snapshot 加载完成 ({:?})", t0.elapsed());
         let t1 = std::time::Instant::now();
-        let (wal, ops) = Wal::open(&dir)?;
+        let (wal, ops) = if cipher.is_some() {
+            Wal::open_with(&dir, cipher.clone())?
+        } else {
+            Wal::open(&dir)?
+        };
         eprintln!(
             "[persist] WAL 解析完成：{} 条 op ({:?})",
             ops.len(),
@@ -54,7 +75,12 @@ impl PersistentGraph {
             }
         }
         eprintln!("[persist] 重放完成，共 {} 条 ({:?})", n, t2.elapsed());
-        Ok(PersistentGraph { graph, wal, dir })
+        Ok(PersistentGraph {
+            graph,
+            wal,
+            dir,
+            cipher,
+        })
     }
 
     /// 只读访问内存图。
@@ -122,7 +148,17 @@ impl PersistentGraph {
     pub fn checkpoint(&mut self) -> io::Result<()> {
         let path = self.dir.join(SNAPSHOT_FILE);
         let tmp = self.dir.join("graph.snp.tmp");
-        fs::write(&tmp, encode_snapshot(&self.graph))?;
+        let plain = encode_snapshot(&self.graph);
+        let bytes = match &self.cipher {
+            None => plain,
+            Some(c) => {
+                let mut b = Vec::with_capacity(plain.len() + 20);
+                b.extend_from_slice(cipher::SNAPSHOT_MAGIC_ENC);
+                b.extend_from_slice(&c.seal(&plain)?);
+                b
+            }
+        };
+        fs::write(&tmp, bytes)?;
         // Windows 上 rename 不能覆盖已存在文件，先删旧快照
         if path.exists() {
             fs::remove_file(&path)?;
@@ -201,7 +237,7 @@ fn invalid(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
 }
 
-fn load_snapshot(path: &Path) -> io::Result<MemoryGraph> {
+fn load_snapshot(path: &Path, cipher: Option<&dyn StorageCipher>) -> io::Result<MemoryGraph> {
     let mut graph = MemoryGraph::new();
     let mut buf = Vec::new();
     match fs::File::open(path) {
@@ -210,6 +246,12 @@ fn load_snapshot(path: &Path) -> io::Result<MemoryGraph> {
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(graph),
         Err(e) => return Err(e),
+    }
+    if buf.len() >= 4 && &buf[..4] == cipher::SNAPSHOT_MAGIC_ENC {
+        let c = cipher.ok_or_else(|| cipher::encrypted_store_error("快照 graph.snp"))?;
+        buf = c.open(&buf[4..]).map_err(|_| {
+            invalid("快照解密失败：数据损坏或密钥不匹配（KEK/DEK 与数据目录不对应）")
+        })?;
     }
     if buf.len() < 12 || &buf[..4] != SNAPSHOT_MAGIC {
         return Err(invalid("bad snapshot header"));
@@ -416,6 +458,155 @@ mod tests {
         assert_eq!(n.filaments.fact, "新事实");
         assert_eq!(n.filaments.confidence, 0.5);
         assert_eq!(pg.graph().edges(), vec![(0, 1, 0.95)]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------- L2.6 加密接缝测试（XOR+CRC 假 cipher，仅验证接缝语义，非真加密） ----------
+
+    /// 测试用伪加密：XOR + CRC 尾。只为驱动接缝路径；真实 AES-256-GCM 在私有仓库。
+    struct TestCipher;
+
+    impl StorageCipher for TestCipher {
+        fn seal(&self, plaintext: &[u8]) -> io::Result<Vec<u8>> {
+            let mut out: Vec<u8> = plaintext.iter().map(|b| b ^ 0xA5).collect();
+            out.extend_from_slice(&crate::crc32::crc32(plaintext).to_le_bytes());
+            Ok(out)
+        }
+        fn open(&self, sealed: &[u8]) -> io::Result<Vec<u8>> {
+            if sealed.len() < 4 {
+                return Err(invalid("sealed too short"));
+            }
+            let (body, crc) = sealed.split_at(sealed.len() - 4);
+            let plain: Vec<u8> = body.iter().map(|b| b ^ 0xA5).collect();
+            if crate::crc32::crc32(&plain).to_le_bytes() != crc {
+                return Err(invalid("tampered"));
+            }
+            Ok(plain)
+        }
+        fn algorithm(&self) -> &'static str {
+            "test-xor"
+        }
+    }
+
+    fn cipher() -> Arc<dyn StorageCipher> {
+        Arc::new(TestCipher)
+    }
+
+    /// 加密库全功能 roundtrip：写 → checkpoint（SNPE + WAL 截断重写头）→ 再写 → 重开。
+    #[test]
+    fn encrypted_roundtrip_survives_checkpoint_and_reopen() {
+        let dir = std::env::temp_dir().join("nylon-cipher-e2e");
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut pg = PersistentGraph::open_with(&dir, Some(cipher())).unwrap();
+            let (a, ta) = pg.add_node(node(1, "加密记忆甲")).unwrap();
+            let (b, tb) = pg.add_node(node(2, "加密记忆乙")).unwrap();
+            pg.add_edge(a, b, 0.7).unwrap();
+            ta.wait().unwrap();
+            tb.wait().unwrap();
+            pg.checkpoint().unwrap(); // 快照加密 + WAL 截断（文件头必须重写）
+            let (_c, tc) = pg.add_node(node(3, "截断后再写")).unwrap();
+            tc.wait().unwrap();
+        }
+        // 落盘内容断言：快照 SNPE 开头且不含明文；WAL 有 WALE 头
+        let snp = fs::read(dir.join(SNAPSHOT_FILE)).unwrap();
+        assert_eq!(
+            &snp[..4],
+            cipher::SNAPSHOT_MAGIC_ENC,
+            "快照应是 SNPE 加密格式"
+        );
+        assert!(
+            !snp.windows(5).any(|w| w == "加密记忆甲".as_bytes()),
+            "快照不得含明文事实"
+        );
+        let wal_bytes = fs::read(dir.join(wal::WAL_FILE)).unwrap();
+        assert_eq!(
+            &wal_bytes[..4],
+            cipher::WAL_MAGIC_ENC,
+            "WAL 应有 WALE 文件头"
+        );
+
+        let pg = PersistentGraph::open_with(&dir, Some(cipher())).unwrap();
+        assert_eq!(
+            pg.graph().node_count(),
+            3,
+            "快照+加密 WAL 重放应恢复全部节点"
+        );
+        assert_eq!(pg.graph().get_node(2).unwrap().filaments.fact, "截断后再写");
+        assert_eq!(pg.graph().edges(), vec![(0, 1, 0.7)]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 社区版二进制（无 cipher）读加密库：快照/WAL 都必须明确报错，不得静默。
+    #[test]
+    fn plaintext_engine_rejects_encrypted_store() {
+        let dir = std::env::temp_dir().join("nylon-cipher-reject");
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut pg = PersistentGraph::open_with(&dir, Some(cipher())).unwrap();
+            let (_a, t) = pg.add_node(node(1, "机密")).unwrap();
+            t.wait().unwrap();
+            pg.checkpoint().unwrap();
+        }
+        let err = match PersistentGraph::open(&dir) {
+            Err(e) => e,
+            Ok(_) => panic!("明文引擎应拒绝加密库"),
+        };
+        assert!(
+            err.to_string().contains("企业版"),
+            "报错应明确指向企业版: {err}"
+        );
+        // 数据未被破坏（没发生误截断）
+        let wal_bytes = fs::read(dir.join(wal::WAL_FILE)).unwrap();
+        assert_eq!(&wal_bytes[..4], cipher::WAL_MAGIC_ENC);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 加密引擎读明文旧库：拒绝并提示迁移（杜绝"以为加密了其实在写明文"）。
+    #[test]
+    fn encrypted_engine_rejects_legacy_plaintext_store() {
+        let dir = std::env::temp_dir().join("nylon-cipher-legacy");
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut pg = PersistentGraph::open(&dir).unwrap();
+            let (_a, t) = pg.add_node(node(1, "明文旧数据")).unwrap();
+            t.wait().unwrap();
+        }
+        let err = match PersistentGraph::open_with(&dir, Some(cipher())) {
+            Err(e) => e,
+            Ok(_) => panic!("应拒绝"),
+        };
+        assert!(
+            err.to_string().contains("storage-encrypt"),
+            "报错应提示迁移工具: {err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 篡改密文：解密必须失败（AEAD 语义），不得静默放行。
+    #[test]
+    fn tampered_ciphertext_is_rejected() {
+        let dir = std::env::temp_dir().join("nylon-cipher-tamper");
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut pg = PersistentGraph::open_with(&dir, Some(cipher())).unwrap();
+            let (_a, t) = pg.add_node(node(1, "完整性测试")).unwrap();
+            t.wait().unwrap();
+            pg.checkpoint().unwrap();
+        }
+        let snp_path = dir.join(SNAPSHOT_FILE);
+        let mut snp = fs::read(&snp_path).unwrap();
+        let mid = snp.len() / 2;
+        snp[mid] ^= 0xFF; // 篡改密文中间一字节
+        fs::write(&snp_path, snp).unwrap();
+        let err = match PersistentGraph::open_with(&dir, Some(cipher())) {
+            Err(e) => e,
+            Ok(_) => panic!("应拒绝"),
+        };
+        assert!(
+            err.to_string().contains("解密失败"),
+            "篡改应触发解密失败报错: {err}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -245,49 +245,106 @@ fn feedback_processed_path(dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// 追加一条回执到 feedback.jsonl（先落盘后入队，崩溃不丢）。
-fn append_feedback_log(dir: &std::path::Path, rec: &FeedbackRecord) -> Result<(), Status> {
+/// L2.6：cipher 存在时行级密封落盘（首行 # NYLE1 标记）；格式与 cipher 不匹配
+/// 时跳过落盘并打警告（反馈通道故障不阻断主流程）。
+fn append_feedback_log(
+    dir: &std::path::Path,
+    rec: &FeedbackRecord,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
+) -> Result<(), Status> {
+    use nylon_storage::cipher;
     let line = serde_json::to_string(&FeedbackLogLine::from(rec))
         .map_err(|e| Status::internal(format!("反馈序列化失败: {e}")))?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(feedback_log_path(dir))
-        .map_err(|e| Status::internal(format!("反馈日志打开失败: {e}")))?;
-    use std::io::Write;
-    f.write_all(line.as_bytes())
-        .and_then(|_| f.write_all(b"\n"))
-        .map_err(|e| Status::internal(format!("反馈日志写入失败: {e}")))
+    let path = feedback_log_path(dir);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let file_encrypted = cipher::jsonl_is_encrypted(&existing);
+    if !existing.is_empty() && file_encrypted != cph.is_some() {
+        eprintln!("[feedback] 警告：feedback.jsonl 格式与静态加密配置不一致，本条回执仅入内存队列");
+    } else {
+        if cph.is_some() && existing.is_empty() {
+            std::fs::write(&path, format!("{}\n", cipher::JSONL_MAGIC_ENC_LINE))
+                .map_err(|e| Status::internal(format!("反馈日志初始化失败: {e}")))?;
+        }
+        let line = cipher::seal_jsonl_line(cph, &line)
+            .map_err(|e| Status::internal(format!("反馈加密失败: {e}")))?;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| Status::internal(format!("反馈日志打开失败: {e}")))?;
+        use std::io::Write;
+        f.write_all(line.as_bytes())
+            .and_then(|_| f.write_all(b"\n"))
+            .map_err(|e| Status::internal(format!("反馈日志写入失败: {e}")))?;
+    }
+    Ok(())
 }
 
-fn load_processed_keys(dir: &std::path::Path) -> std::collections::HashSet<String> {
-    std::fs::read_to_string(feedback_processed_path(dir))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| serde_json::from_str::<String>(l).ok())
+fn load_processed_keys(
+    dir: &std::path::Path,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
+) -> std::collections::HashSet<String> {
+    use nylon_storage::cipher;
+    let raw = std::fs::read_to_string(feedback_processed_path(dir)).unwrap_or_default();
+    let encrypted = cipher::jsonl_is_encrypted(&raw);
+    raw.lines()
+        .filter(|l| l.trim() != cipher::JSONL_MAGIC_ENC_LINE)
+        .filter_map(|l| {
+            if encrypted {
+                cipher::open_jsonl_line(cph, l)
+            } else {
+                Some(l.to_string())
+            }
+        })
+        .filter_map(|l| serde_json::from_str::<String>(&l).ok())
         .collect()
 }
 
-fn mark_feedback_processed(dir: &std::path::Path, key: &str) {
+fn mark_feedback_processed(
+    dir: &std::path::Path,
+    key: &str,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
+) {
+    use nylon_storage::cipher;
+    let path = feedback_processed_path(dir);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if cph.is_some() && existing.is_empty() {
+        let _ = std::fs::write(&path, format!("{}\n", cipher::JSONL_MAGIC_ENC_LINE));
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(feedback_processed_path(dir))
+        .open(&path)
     {
         use std::io::Write;
         if let Ok(line) = serde_json::to_string(&key.to_string()) {
-            let _ = f.write_all(line.as_bytes());
-            let _ = f.write_all(b"\n");
+            if let Ok(line) = cipher::seal_jsonl_line(cph, &line) {
+                let _ = f.write_all(line.as_bytes());
+                let _ = f.write_all(b"\n");
+            }
         }
     }
 }
 
 /// 启动回放：feedback.jsonl 中尚未处理的回执（按去重键过滤）。
-fn load_unprocessed_feedback(dir: &std::path::Path) -> Vec<FeedbackRecord> {
-    let processed = load_processed_keys(dir);
-    std::fs::read_to_string(feedback_log_path(dir))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| serde_json::from_str::<FeedbackLogLine>(l).ok())
+fn load_unprocessed_feedback(
+    dir: &std::path::Path,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
+) -> Vec<FeedbackRecord> {
+    use nylon_storage::cipher;
+    let processed = load_processed_keys(dir, cph);
+    let raw = std::fs::read_to_string(feedback_log_path(dir)).unwrap_or_default();
+    let encrypted = cipher::jsonl_is_encrypted(&raw);
+    raw.lines()
+        .filter(|l| l.trim() != cipher::JSONL_MAGIC_ENC_LINE)
+        .filter_map(|l| {
+            if encrypted {
+                cipher::open_jsonl_line(cph, l)
+            } else {
+                Some(l.to_string())
+            }
+        })
+        .filter_map(|l| serde_json::from_str::<FeedbackLogLine>(&l).ok())
         .map(FeedbackRecord::from)
         .filter(|r| !processed.contains(&r.dedup_key()))
         .collect()
@@ -310,6 +367,10 @@ pub struct EngineService {
     auth: Option<Arc<ApiKeys>>,
     /// 审计事件流（L2.3）：None = 关闭（NYLON_AUDIT=off 或未挂接）。
     audit: Option<Audit>,
+    /// 静态加密（L2.6 企业版）：反馈日志行级密封用；None = 明文（社区版）。
+    /// 反思 worker 在 new() 里就 spawn 了，而 cipher 由 with_cipher() 后注入，
+    /// 所以用共享槽：worker 每轮处理时现读，with_cipher 写入后即刻生效。
+    cipher: Arc<std::sync::RwLock<Option<Arc<dyn nylon_storage::StorageCipher>>>>,
 }
 
 /// 嵌入通道运行健康（issue #4）。热路径（weave/resonate）逐次上报，
@@ -348,10 +409,13 @@ impl EngineService {
             }
         }
         let inner = Arc::new(Mutex::new(Inner { store, index }));
+        let cipher_slot: Arc<std::sync::RwLock<Option<Arc<dyn nylon_storage::StorageCipher>>>> =
+            Arc::new(std::sync::RwLock::new(None));
         let reflect_tx = llm.clone().map(|llm| {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ReflectWork>();
             let inner = Arc::clone(&inner);
             let embedder = embedder.clone();
+            let cipher_slot = Arc::clone(&cipher_slot);
             tokio::spawn(async move {
                 let mut pending: Vec<ReflectWork> = Vec::new();
                 let mut feedback_done: std::collections::HashSet<String> =
@@ -362,12 +426,14 @@ impl EngineService {
                         Ok(None) => {
                             if !pending.is_empty() {
                                 let jobs = std::mem::take(&mut pending);
+                                let cph = cipher_slot.read().ok().and_then(|g| g.clone());
                                 process_reflect_work(
                                     &inner,
                                     embedder.as_ref(),
                                     llm.as_ref(),
                                     jobs,
                                     &mut feedback_done,
+                                    cph.as_deref(),
                                 )
                                 .await;
                             }
@@ -376,12 +442,14 @@ impl EngineService {
                         Err(_) => {
                             if !pending.is_empty() {
                                 let jobs = std::mem::take(&mut pending);
+                                let cph = cipher_slot.read().ok().and_then(|g| g.clone());
                                 process_reflect_work(
                                     &inner,
                                     embedder.as_ref(),
                                     llm.as_ref(),
                                     jobs,
                                     &mut feedback_done,
+                                    cph.as_deref(),
                                 )
                                 .await;
                             }
@@ -391,19 +459,6 @@ impl EngineService {
             });
             tx
         });
-        // 启动时回放未处理的反馈回执：崩溃/重启不丢失败信号（反馈驱动反思）
-        if let Some(tx) = &reflect_tx {
-            let dir = inner.lock().ok().map(|i| i.store.dir().to_path_buf());
-            if let Some(dir) = dir {
-                let backlog = load_unprocessed_feedback(&dir);
-                if !backlog.is_empty() {
-                    eprintln!("[reflect] 回放未处理反馈回执 {} 条", backlog.len());
-                    for rec in backlog {
-                        let _ = tx.send(ReflectWork::Feedback(rec));
-                    }
-                }
-            }
-        }
         EngineService {
             inner,
             embedder,
@@ -412,7 +467,32 @@ impl EngineService {
             reflect_tx,
             auth: None,
             audit: None,
+            cipher: cipher_slot,
         }
+    }
+
+    /// 注入静态加密实现（L2.6 企业版）：反馈日志行级密封。
+    /// 反馈回执的启动回放在这里做——cipher 在 new() 之后才知道，回放需要它解密历史行。
+    pub fn with_cipher(self, cipher: Option<Arc<dyn nylon_storage::StorageCipher>>) -> Self {
+        // 先写共享槽再回放：worker 可能立刻开始消费回放条目，必须让它看到 cipher，
+        // 否则处理完打 processed 标记时会往加密文件里写明文行。
+        if let Ok(mut slot) = self.cipher.write() {
+            *slot = cipher.clone();
+        }
+        // 启动时回放未处理的反馈回执：崩溃/重启不丢失败信号（反馈驱动反思）
+        if let Some(tx) = &self.reflect_tx {
+            let dir = self.inner.lock().ok().map(|i| i.store.dir().to_path_buf());
+            if let Some(dir) = dir {
+                let backlog = load_unprocessed_feedback(&dir, cipher.as_deref());
+                if !backlog.is_empty() {
+                    eprintln!("[reflect] 回放未处理反馈回执 {} 条", backlog.len());
+                    for rec in backlog {
+                        let _ = tx.send(ReflectWork::Feedback(rec));
+                    }
+                }
+            }
+        }
+        self
     }
 
     /// 记录一次嵌入调用成功（issue #4）：清零连续失败计数。
@@ -1231,6 +1311,7 @@ async fn process_reflect_work(
     llm: &dyn ChatModel,
     items: Vec<ReflectWork>,
     feedback_done: &mut std::collections::HashSet<String>,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
 ) {
     let mut sessions = Vec::new();
     let mut feedbacks = Vec::new();
@@ -1250,7 +1331,7 @@ async fn process_reflect_work(
     }
     if std::env::var("NYLON_FEEDBACK_REFLECT").is_ok() {
         for rec in feedbacks {
-            process_feedback(inner, embedder, llm, &rec).await;
+            process_feedback(inner, embedder, llm, &rec, cph).await;
         }
     }
 }
@@ -1263,6 +1344,7 @@ async fn process_feedback(
     embedder: Option<&Arc<dyn Embedder>>,
     llm: &dyn ChatModel,
     rec: &FeedbackRecord,
+    cph: Option<&dyn nylon_storage::StorageCipher>,
 ) {
     let dir = inner.lock().ok().map(|i| i.store.dir().to_path_buf());
     let Some(dir) = dir else { return };
@@ -1271,7 +1353,7 @@ async fn process_feedback(
     let mut ctx_ids: Vec<u32> = rec.shown_node_ids.clone();
     if ctx_ids.is_empty() {
         let Some(emb) = embedder else {
-            mark_feedback_processed(&dir, &rec.dedup_key());
+            mark_feedback_processed(&dir, &rec.dedup_key(), cph);
             return;
         };
         match emb.embed(std::slice::from_ref(&rec.query)).await {
@@ -1316,7 +1398,7 @@ async fn process_feedback(
     };
     if ctx_facts.is_empty() {
         // 记忆里确实什么都没有——缺信息而非缺连接，无话可说，标记完成
-        mark_feedback_processed(&dir, &rec.dedup_key());
+        mark_feedback_processed(&dir, &rec.dedup_key(), cph);
         return;
     }
     // 3. LLM 诊断 + 定向推断
@@ -1376,7 +1458,7 @@ async fn process_feedback(
         "[reflect] 反馈驱动反思 tenant={} owner={} rating={} 补推断 {} 个 :: {:.60}",
         rec.tenant_id, rec.owner_id, rec.rating, wrote, rec.query
     );
-    mark_feedback_processed(&dir, &rec.dedup_key());
+    mark_feedback_processed(&dir, &rec.dedup_key(), cph);
 }
 
 async fn process_reflection_jobs(
@@ -2603,7 +2685,8 @@ impl MemoryEngine for EngineService {
                 .map_err(|_| Status::internal("state lock poisoned"))?;
             inner.store.dir().to_path_buf()
         };
-        append_feedback_log(&dir, &rec)?;
+        let cph = self.cipher.read().ok().and_then(|g| g.clone());
+        append_feedback_log(&dir, &rec, cph.as_deref())?;
         if let Some(tx) = &self.reflect_tx {
             let _ = tx.send(ReflectWork::Feedback(rec.clone()));
         }
