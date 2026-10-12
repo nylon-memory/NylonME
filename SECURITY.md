@@ -1,6 +1,6 @@
 # NylonME Security Model
 
-> **中文速览**：当前版本**静态数据明文落盘**（`graph.snp` / `wal.log` / `audit.jsonl`），**传输默认明文**、可开内置 TLS（`NYLON_TLS_CERT`/`NYLON_TLS_KEY`，L2.5）。自用/局域网部署的正确姿势是：全盘加密（BitLocker/LUKS/FileVault）+ 数据目录权限收紧 + 备份文件同等对待。**静态加密（L2.6）经评估后明确不进社区版**：没有外部 KMS 的信封加密（密钥和数据放同一台机器）对真实威胁模型是半吊子，我们不发布会制造虚假安全感的功能；企业版将以 KMS + 每租户 KEK 的完整形态提供。社区版的答案是 FDE + 文件权限——这也是 PostgreSQL 的官方立场。我们发现"服务器永不见明文"的零知识承诺对语义记忆引擎在架构上不成立，因此不会那样宣传——详见下文威胁模型。安全问题请提 GitHub Security Advisory，不要开公开 issue。
+> **中文速览**：当前版本**静态数据明文落盘**（`graph.snp` / `wal.log` / `audit.jsonl`），**传输默认明文**、可开内置 TLS（`NYLON_TLS_CERT`/`NYLON_TLS_KEY`，L2.5）。自用/局域网部署的正确姿势是：全盘加密（BitLocker/LUKS/FileVault）+ 数据目录权限收紧 + 备份文件同等对待。**静态加密（L2.6）经评估后明确不进社区版**：没有外部 KMS 的信封加密（密钥和数据放同一台机器）对真实威胁模型是半吊子，我们不发布会制造虚假安全感的功能；企业版已提供——AES-256-GCM 信封加密（KEK 包裹每库 DEK，v1 为 0600 密钥文件托管，KMS + 每租户 KEK 在路线图上），有需求请联系获取企业版构建。社区版的答案是 FDE + 文件权限——这也是 PostgreSQL 的官方立场。我们发现"服务器永不见明文"的零知识承诺对语义记忆引擎在架构上不成立，因此不会那样宣传——详见下文威胁模型。安全问题请提 GitHub Security Advisory，不要开公开 issue。
 
 This document states, as plainly as we can, what NylonME protects today, what
 it does not, and how to deploy it safely. We would rather be trusted for being
@@ -15,7 +15,7 @@ precise than marketed for being vague.
 | Audit stream (L2.3) | Append-only `audit.jsonl` of who did what, including denied attempts | ✅ built-in (`NYLON_AUDIT`) |
 | Snapshots & backup (L2.4) | CRC-verified WAL with self-healing truncation, periodic checkpoint, hot-backup friendly | ✅ built-in |
 | Transport encryption (L2.5) | TLS for gRPC + HTTP/UI/MCP | ✅ on main (`NYLON_TLS_CERT`/`NYLON_TLS_KEY`, off by default) |
-| At-rest encryption (L2.6) | Envelope encryption of snapshot + WAL + audit | 🚫 community: by design, use FDE (see below) · 🏢 enterprise: KMS + per-tenant KEKs |
+| At-rest encryption (L2.6) | Envelope encryption of snapshot + WAL + audit | 🚫 community: by design, use FDE (see below) · 🏢 enterprise: **available** — AES-256-GCM envelope encryption (KEK-wrapped per-store DEK; v1 file/env KEK custody, KMS + per-tenant KEKs on the roadmap). Contact us for the enterprise build |
 
 ## What is *not* protected today — read this before deploying
 
@@ -77,8 +77,10 @@ and MySQL InnoDB TDE:
    a separate opt-in is the cautionary tale.)
 4. **Community/enterprise split, honestly drawn.** Community: built-in TLS
    (shipped, off by default) + FDE + file permissions — the PostgreSQL
-   answer, sufficient for self-hosted deployments. Enterprise (planned):
-   envelope at-rest encryption with KMS integration and per-tenant KEKs,
+   answer, sufficient for self-hosted deployments. Enterprise (available):
+   envelope at-rest encryption — AES-256-GCM with a KEK-wrapped per-store
+   DEK; v1 custodies the KEK in a 0600 key file outside the data directory,
+   with OS keychain / KMS integration and per-tenant KEKs on the roadmap,
    because the KEK must live outside the machine for disk-level encryption
    to mean anything.
 
