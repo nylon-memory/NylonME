@@ -128,6 +128,28 @@ struct AuditQuery {
     limit: Option<usize>,
 }
 
+/// 身份自检：贴上 key 就知道「我是谁」——绑定的租户（记忆空间）、权限档位、成员别名。
+/// 开放模式返回 mode=open。Console 顶栏用它在用户粘 key 的瞬间把身份亮出来，
+/// 消除「这把 key 对不对、能干什么」的困惑（2026-10-12 产品化反馈）。
+async fn whoami(
+    State(svc): State<EngineService>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    if svc.auth().is_none() {
+        return Ok(Json(serde_json::json!({ "mode": "open" })));
+    }
+    let grant = http_authorize(svc.auth(), &headers, Scope::Read, None).map_err(map_status)?;
+    let Some(g) = grant else {
+        return Err(ApiError(StatusCode::UNAUTHORIZED, "缺少授权信息".into()));
+    };
+    Ok(Json(serde_json::json!({
+        "mode": "auth",
+        "tenant": g.tenant,
+        "scope": g.scope.as_str(),
+        "name": g.name,
+    })))
+}
+
 /// 审计事件查询（L2.3）。鉴权模式下非通配 key 只能看自己租户的事件。
 async fn audit_events(
     State(svc): State<EngineService>,
@@ -666,6 +688,7 @@ pub fn router(svc: EngineService) -> Router {
         .route("/style.css", get(ui_css))
         .route("/openapi.json", get(openapi))
         .route("/v1/stats", get(stats))
+        .route("/v1/whoami", get(whoami))
         .route("/v1/nodes", get(list_nodes))
         .route("/v1/nodes/{id}", get(get_node).delete(delete_node))
         .route("/v1/graph", get(graph_view))

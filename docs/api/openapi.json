@@ -32,6 +32,32 @@
     }
    }
   },
+  "/v1/whoami": {
+   "get": {
+    "summary": "Identity introspection for the presented API key",
+    "description": "Returns the key's bound tenant (memory space), scope and member name; mode=open when auth is disabled. The Console calls this the moment a key is pasted so users can see 'who am I' without learning tenant/owner jargon.",
+    "operationId": "whoami",
+    "responses": {
+     "200": {
+      "description": "Identity of the presented key (or open mode)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "mode": { "type": "string", "enum": ["open", "auth"] },
+          "tenant": { "type": "string", "description": "tenant the key is bound to; \"*\" = wildcard admin" },
+          "scope": { "type": "string", "enum": ["read", "write", "admin"] },
+          "name": { "type": "string", "description": "optional member alias set at issuance" }
+         }
+        }
+       }
+      }
+     },
+     "401": { "description": "Missing or invalid API key" }
+    }
+   }
+  },
   "/v1/nodes": {
    "get": {
     "summary": "List memory nodes (newest first)",

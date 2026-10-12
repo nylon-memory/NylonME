@@ -24,7 +24,7 @@ const I18N = {
     "team.noActivity": "no attributed activity yet — name your keys to see who did what",
     "th.key": "Key", "th.name": "Name", "th.scope": "Scope", "th.actor": "Actor",
     "ph.teamName": "member name — e.g. alice",
-    "ph.teamTenant": "tenant (memory space)",
+    "ph.teamTenant": "space slug (tenant) — e.g. default",
     "tip.teamScope": "read = query only · write = + weave · admin = + manage keys / wildcard tenant",
     "btn.issueKey": "Issue",
     "ov.nodes": "memory nodes", "ov.edges": "graph edges",
@@ -32,7 +32,7 @@ const I18N = {
     "ov.recent": "Latest memories", "ov.activity": "Recent activity", "ov.tension": "Tension distribution",
     "ov.empty": "no data yet",
     "graph.n100": "100 nodes", "graph.n300": "300 nodes", "graph.n600": "600 nodes",
-    "graph.byTension": "color: tension", "graph.byOwner": "color: owner",
+    "graph.byTension": "color: tension", "graph.byOwner": "color: library",
     "graph.empty": "no nodes to display — weave some memories first",
     "tip.graphLimit": "max nodes in view (latest first)",
     "btn.delete": "Forget",
@@ -40,8 +40,8 @@ const I18N = {
     "fb.prompt": "Did this answer well?",
     "fb.down": "not helpful", "fb.wrong": "wrong answer", "fb.insufficient": "missing info",
     "audit.allActions": "all actions", "audit.empty": "no audit events",
-    "th.time": "Time", "th.action": "Action", "th.tenant": "Tenant", "th.owner": "Owner", "th.detail": "Detail",
-    "scope.all": "all owners", "scope.mine": "current owner",
+    "th.time": "Time", "th.action": "Action", "th.tenant": "Space", "th.owner": "Library", "th.detail": "Detail",
+    "scope.all": "all libraries", "scope.mine": "current library",
     "btn.refresh": "Refresh",
     "th.fact": "Fact", "th.tension": "Tension", "th.relations": "Relations", "th.mentions": "Mentions", "th.created": "Created",
     "mem.empty": "no memories found",
@@ -52,9 +52,14 @@ const I18N = {
     "btn.weave": "Weave", "btn.weaveSession": "Weave session",
     "drawer.node": "Node",
     "ph.filter": "filter facts…",
+    "lbl.owner": "memory space",
+    "lbl.apikey": "key",
     "ph.apikey": "API key (optional)",
-    "tip.owner": "memory namespace — whose memories to view (e.g. default); NOT a username",
-    "tip.apikey": "your API key (admin or issued) — the only credential; there is no account/password",
+    "tip.owner": "memory space (owner) — memories in the same space resonate together; spaces are isolated. NOT a username",
+    "tip.apikey": "your API key — opens a space (tenant). Paste it and the chip next to it shows who you are",
+    "whoami.space": "space:",
+    "whoami.allSpaces": "* (all spaces)",
+    "whoami.invalid": "invalid key",
     "auth.need": "401 — paste your API key in the key box (admin key: printed once at first boot, or in api-keys.json)",
     "ph.query": "query — e.g. flight seat preference",
     "ph.fact": "a self-contained fact, e.g. Alice prefers window seats on business trips",
@@ -107,7 +112,7 @@ const I18N = {
     "team.noActivity": "暂无归因活动——给 key 起名字后就能看到谁做了什么",
     "th.key": "Key", "th.name": "别名", "th.scope": "档位", "th.actor": "操作者",
     "ph.teamName": "成员别名——如 alice",
-    "ph.teamTenant": "租户（记忆空间）",
+    "ph.teamTenant": "空间 slug（tenant）——如 default",
     "tip.teamScope": "read=只读查询 · write=+写入编织 · admin=+管理 key/通配租户",
     "btn.issueKey": "签发",
     "ov.nodes": "记忆节点", "ov.edges": "图边",
@@ -115,7 +120,7 @@ const I18N = {
     "ov.recent": "最新记忆", "ov.activity": "最近活动", "ov.tension": "张力分布",
     "ov.empty": "暂无数据",
     "graph.n100": "100 节点", "graph.n300": "300 节点", "graph.n600": "600 节点",
-    "graph.byTension": "着色：张力", "graph.byOwner": "着色：归属",
+    "graph.byTension": "着色：张力", "graph.byOwner": "着色：记忆库",
     "graph.empty": "没有可显示的节点——先编织一些记忆吧",
     "tip.graphLimit": "视图内最大节点数（按最新优先）",
     "btn.delete": "遗忘",
@@ -123,8 +128,8 @@ const I18N = {
     "fb.prompt": "这次回答有用吗？",
     "fb.down": "没帮助", "fb.wrong": "答错了", "fb.insufficient": "信息不足",
     "audit.allActions": "全部动作", "audit.empty": "暂无审计事件",
-    "th.time": "时间", "th.action": "动作", "th.tenant": "租户", "th.owner": "归属", "th.detail": "细节",
-    "scope.all": "全部 owner", "scope.mine": "仅当前 owner",
+    "th.time": "时间", "th.action": "动作", "th.tenant": "空间", "th.owner": "记忆库", "th.detail": "细节",
+    "scope.all": "全部记忆库", "scope.mine": "仅当前记忆库",
     "btn.refresh": "刷新",
     "th.fact": "事实", "th.tension": "张力", "th.relations": "关系", "th.mentions": "提及", "th.created": "创建时间",
     "mem.empty": "没有找到记忆",
@@ -135,9 +140,14 @@ const I18N = {
     "btn.weave": "编织", "btn.weaveSession": "编织会话",
     "drawer.node": "节点",
     "ph.filter": "过滤事实…",
+    "lbl.owner": "记忆库",
+    "lbl.apikey": "key",
     "ph.apikey": "API key（可选）",
-    "tip.owner": "记忆空间名——查看谁的记忆（如 default / codex）；不是用户名",
-    "tip.apikey": "你的 API key（管理员或签发的 key）——这是唯一凭证，没有账号密码概念",
+    "tip.owner": "记忆库名（owner）——同一库的记忆会互相联想，库与库之间隔离；不是用户名",
+    "tip.apikey": "你的 API key——一把 key 开一个空间（tenant）。贴上来，旁边的芯片会告诉你「你是谁」",
+    "whoami.space": "空间:",
+    "whoami.allSpaces": "*（全部空间）",
+    "whoami.invalid": "key 无效",
     "auth.need": "401 未授权——请在顶栏 key 框填入 API key（管理员 key 见首次启动打印或 api-keys.json）",
     "ph.query": "查询——例如：出差时的座位偏好",
     "ph.fact": "一条自包含的事实，例如：Alice 出差喜欢靠窗座位",
@@ -215,8 +225,26 @@ $("theme-toggle").addEventListener("click", () => {
 /* ---------- owner ---------- */
 const ownerEl = $("owner");
 ownerEl.value = localStorage.getItem("nylon.owner") || "default";
+
+/* 记忆库名自动补全：记住用过的空间名，下次直接选 */
+function rememberOwner(v) {
+  if (!v) return;
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem("nylon.owners") || "[]"); } catch (e) {}
+  if (!list.includes(v)) list.push(v);
+  localStorage.setItem("nylon.owners", JSON.stringify(list.slice(-20)));
+  renderOwnerList();
+}
+function renderOwnerList() {
+  let list = ["default"];
+  try { list = list.concat(JSON.parse(localStorage.getItem("nylon.owners") || "[]")); } catch (e) {}
+  $("owner-list").innerHTML = [...new Set(list)].map((o) => `<option value="${o}">`).join("");
+}
+renderOwnerList();
 ownerEl.addEventListener("change", () => {
-  localStorage.setItem("nylon.owner", ownerEl.value.trim() || "default");
+  const v = ownerEl.value.trim() || "default";
+  localStorage.setItem("nylon.owner", v);
+  rememberOwner(v);
   state.page = 0;
   loadMemories();
 });
@@ -229,9 +257,33 @@ keyEl.value = localStorage.getItem("nylon.apikey") || "";
 keyEl.addEventListener("change", () => {
   localStorage.setItem("nylon.apikey", keyEl.value.trim());
   keyEl.classList.remove("needs-key");
+  refreshWhoami();
   loadStats();
   loadMemories();
 });
+
+/* 身份芯片：贴上 key 的瞬间告诉用户「我是谁」——绑定的空间、档位、别名。
+   用户不需要懂 tenant/owner 的术语，芯片用人话回答。 */
+async function refreshWhoami() {
+  const el = $("whoami");
+  const key = keyEl.value.trim();
+  try {
+    const r = await fetch("/v1/whoami", { headers: key ? { "x-api-key": key } : {} });
+    const d = await r.json().catch(() => ({}));
+    if (d.mode === "open") { el.hidden = true; return; }
+    if (!r.ok) {
+      el.textContent = t("whoami.invalid");
+      el.classList.add("bad");
+      el.hidden = !key;   // 没贴 key 时 401 属正常，不亮红灯
+      return;
+    }
+    const space = d.tenant === "*" ? t("whoami.allSpaces") : d.tenant;
+    el.textContent = (d.name ? d.name + " · " : "") + t("whoami.space") + " " + space + " · " + d.scope;
+    el.classList.remove("bad");
+    el.hidden = false;
+  } catch (e) { /* 网络抖动不打扰 */ }
+}
+refreshWhoami();
 
 async function api(path, body, method) {
   const key = keyEl.value.trim();

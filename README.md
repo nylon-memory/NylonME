@@ -49,6 +49,8 @@ Two design rules the experiments forced on us: the **understanding layer lives o
 
 Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your agent gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node). See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for per-client setup.
 
+Three concepts cover the whole mental model — **space** (tenant, the security boundary your key opens), **library** (owner, where memories live and resonate), **key** (the only credential): [docs/CONCEPTS.md](docs/CONCEPTS.md) · [中文](docs/CONCEPTS.zh-CN.md).
+
 To share one memory store across machines, use optional **remote bridge mode**: set `NYLON_SERVER=host:50051` (optionally `NYLON_API_KEY`); MCP calls are forwarded to the remote engine and no engine is embedded locally.
 
 ### Turnkey memory for DSH (DeepSeek Harness)
