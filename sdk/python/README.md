@@ -63,9 +63,14 @@ neighbors = client.search(embedding, top_k=10)
 | `target` | `127.0.0.1:50051` | `NYLON_SERVER` |
 | `owner` | `default` | `NYLON_OWNER` |
 | `tenant` | `default` | `NYLON_TENANT` |
+| `api_key` | none | `NYLON_API_KEY` |
 | `timeout` | 30s per call | - |
 
 `owner` scopes memories per person/project; `tenant` isolates datasets entirely.
+
+When the engine runs with auth enabled (`NYLON_API_KEYS`/`NYLON_API_KEYS_FILE`),
+pass `api_key=` or set `NYLON_API_KEY` — every RPC then carries the
+`x-api-key` metadata. Without it the engine answers UNAUTHENTICATED.
 
 ## API surface
 
@@ -76,6 +81,7 @@ neighbors = client.search(embedding, top_k=10)
 | `resonate(query, budget=..., max_hops=...)` | `Resonate` |
 | `search(embedding, top_k=...)` | `Search` |
 | `get_node(node_id)` | `GetNode` |
+| `feedback(query, rating=..., comment=...)` | `ReportFeedback` |
 
 `max_hops=0` turns resonance into precise recall (seed-only, no graph
 spreading); omit it for the engine default.

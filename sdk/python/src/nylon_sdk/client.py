@@ -7,6 +7,11 @@ Endpoint and scoping defaults follow the CLI/MCP conventions:
     NYLON_SERVER  (default "127.0.0.1:50051")
     NYLON_OWNER   (default "default")
     NYLON_TENANT  (default "default")
+    NYLON_API_KEY (optional — required when the engine runs with auth on)
+
+Auth (L2.2): pass ``api_key=`` or set NYLON_API_KEY; every RPC then carries
+the ``x-api-key`` metadata the engine's interceptor checks. Without it an
+auth-enabled engine answers every call with UNAUTHENTICATED.
 
 TLS (L2.5): use an ``https://`` prefixed NYLON_SERVER/target to enable TLS.
 For self-signed certificates set NYLON_TLS_CA (or the ``tls_ca`` argument) to
@@ -55,6 +60,11 @@ def _normalize_target(target: str) -> str:
 
 def _resolve_tls_ca(tls_ca: Optional[str]) -> Optional[str]:
     return tls_ca or os.environ.get("NYLON_TLS_CA") or None
+
+
+def _resolve_api_key(api_key: Optional[str]) -> Optional[tuple]:
+    key = api_key or os.environ.get("NYLON_API_KEY") or None
+    return (("x-api-key", key),) if key else None
 
 
 def _sync_channel(target: str, tls_ca: Optional[str], options: Optional[Sequence]):
@@ -181,6 +191,7 @@ class NylonClient:
         *,
         owner: Optional[str] = None,
         tenant: Optional[str] = None,
+        api_key: Optional[str] = None,
         timeout: float = 30.0,
         channel_options: Optional[Sequence] = None,
         tls_ca: Optional[str] = None,
@@ -189,6 +200,7 @@ class NylonClient:
         self._channel, self.target = _sync_channel(raw, tls_ca, channel_options)
         self.owner = owner or os.environ.get("NYLON_OWNER") or "default"
         self.tenant = tenant or os.environ.get("NYLON_TENANT") or "default"
+        self._metadata = _resolve_api_key(api_key)
         self.timeout = timeout
         self._stub = pb_grpc.MemoryEngineStub(self._channel)
 
@@ -217,6 +229,7 @@ class NylonClient:
                 context=_context(task, emotion_valence, device, None),
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return WeaveResult(
             node_id=resp.node_id,
@@ -238,6 +251,7 @@ class NylonClient:
                 skip_abstract=skip_abstract,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return _session_result(resp)
 
@@ -262,6 +276,7 @@ class NylonClient:
                 top_k=top_k,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return _resonate_result(resp)
 
@@ -274,6 +289,7 @@ class NylonClient:
                 top_k=top_k,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return [_activated(a) for a in resp.neighbors]
 
@@ -281,6 +297,7 @@ class NylonClient:
         resp = self._stub.GetNode(
             pb.GetNodeRequest(tenant_id=self.tenant, node_id=node_id),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return NodeInfo(
             node_id=resp.node_id,
@@ -311,6 +328,7 @@ class NylonClient:
                 shown_node_ids=shown_node_ids or [],
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return resp.recorded
 
@@ -324,6 +342,7 @@ class AsyncNylonClient:
         *,
         owner: Optional[str] = None,
         tenant: Optional[str] = None,
+        api_key: Optional[str] = None,
         timeout: float = 30.0,
         channel_options: Optional[Sequence] = None,
         tls_ca: Optional[str] = None,
@@ -332,6 +351,7 @@ class AsyncNylonClient:
         self._channel, self.target = _aio_channel(raw, tls_ca, channel_options)
         self.owner = owner or os.environ.get("NYLON_OWNER") or "default"
         self.tenant = tenant or os.environ.get("NYLON_TENANT") or "default"
+        self._metadata = _resolve_api_key(api_key)
         self.timeout = timeout
         self._stub = pb_grpc.MemoryEngineStub(self._channel)
 
@@ -360,6 +380,7 @@ class AsyncNylonClient:
                 context=_context(task, emotion_valence, device, None),
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return WeaveResult(
             node_id=resp.node_id,
@@ -381,6 +402,7 @@ class AsyncNylonClient:
                 skip_abstract=skip_abstract,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return _session_result(resp)
 
@@ -405,6 +427,7 @@ class AsyncNylonClient:
                 top_k=top_k,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return _resonate_result(resp)
 
@@ -417,6 +440,7 @@ class AsyncNylonClient:
                 top_k=top_k,
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return [_activated(a) for a in resp.neighbors]
 
@@ -424,6 +448,7 @@ class AsyncNylonClient:
         resp = await self._stub.GetNode(
             pb.GetNodeRequest(tenant_id=self.tenant, node_id=node_id),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return NodeInfo(
             node_id=resp.node_id,
@@ -450,5 +475,6 @@ class AsyncNylonClient:
                 shown_node_ids=shown_node_ids or [],
             ),
             timeout=self.timeout,
+            metadata=self._metadata,
         )
         return resp.recorded
