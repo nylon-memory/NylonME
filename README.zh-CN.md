@@ -2,8 +2,16 @@
 
 [English](README.md) | 简体中文 | [官网 nylonme.com](https://www.nylonme.com)
 
+[![GitHub stars](https://img.shields.io/github/stars/nylon-memory/NylonME?style=flat)](https://github.com/nylon-memory/NylonME/stargazers)
+[![Release](https://img.shields.io/github/v/release/nylon-memory/NylonME)](https://github.com/nylon-memory/NylonME/releases)
+[![CI](https://github.com/nylon-memory/NylonME/actions/workflows/ci.yml/badge.svg)](https://github.com/nylon-memory/NylonME/actions)
+[![PyPI](https://img.shields.io/pypi/v/nylon-sdk)](https://pypi.org/project/nylon-sdk/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 > 面向 AI Agent 的单机记忆引擎：记忆丝多维修织 · 网状记忆图 · 张力遗忘 · 情境共振
 > 状态：Phase 2 活跃开发中（API 仍可能演进）
+
+> 如果 NylonME 帮你的 Agent 记住了事，欢迎点一颗 star——这能帮更多人在 GitHub 上发现它。这就是我们唯一的请求。
 
 NylonME 把一条记忆建模为多股"丝"（事实/情感/时序/关系/置信/频次）的编织体，记忆节点之间以加权边构成网状图而非层级树。检索不是 top-k 相似度匹配，而是"情境共振"：从种子节点出发，按关联强度 × 情境匹配 × 实时张力在图上扩散激活，并受全局激活预算约束（防止高扇出节点扩散爆炸）。不使用的记忆会沿张力遗忘曲线自然沉降，而不是无限堆积。
 
@@ -70,6 +78,8 @@ dsh plugin --profile web add <nylon/plugins/dsh-nylonme-memory>
 ![NylonME Console](docs/ui-console-zh.png)
 
 七个视图：**总览**（统计卡片、最新记忆、活动流、张力分布直方图）、**记忆**（浏览/过滤，实时张力）、**图谱**（零依赖力导向记忆网络图——引擎核心叙事的可视化）、**共振**（调试查询：种子、分数、自适应深度）带一键回答质量反馈条（驱动空闲反思）、**编织**（单条 + 会话批量）、**审计**、**团队**（key 管理 + 成员活动）。节点抽屉内置**遗忘**操作（`DELETE /v1/nodes/{id}` 打墓碑）。与 gRPC/MCP 同一个引擎、同一条写路径。REST 端点与 gRPC 契约一一对应，规范见 [docs/api/openapi.json](docs/api/openapi.json)。内置深色/浅色主题和中英文界面切换。
+
+界面只说人话：三层概念叫**空间**（tenant，key 打开的安全边界）、**记忆库**（owner，记忆联想范围）、**钥匙**（唯一凭证）——见 [docs/CONCEPTS.zh-CN.md](docs/CONCEPTS.zh-CN.md)。把 key 贴进顶栏，旁边的身份芯片立刻显示「这把 key 开哪个空间、什么档位、你是谁」（`GET /v1/whoami`），key 无效则亮红——不用懂 tenant/owner 术语。
 
 ## 多租户与鉴权
 

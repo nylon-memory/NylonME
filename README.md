@@ -2,8 +2,16 @@
 
 [简体中文](README.zh-CN.md) | English | [nylonme.com](https://www.nylonme.com)
 
+[![GitHub stars](https://img.shields.io/github/stars/nylon-memory/NylonME?style=flat)](https://github.com/nylon-memory/NylonME/stargazers)
+[![Release](https://img.shields.io/github/v/release/nylon-memory/NylonME)](https://github.com/nylon-memory/NylonME/releases)
+[![CI](https://github.com/nylon-memory/NylonME/actions/workflows/ci.yml/badge.svg)](https://github.com/nylon-memory/NylonME/actions)
+[![PyPI](https://img.shields.io/pypi/v/nylon-sdk)](https://pypi.org/project/nylon-sdk/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 > Single-node memory engine for AI agents: multi-filament memory weaving, mesh memory graph, tension-based forgetting, context resonance.
 > Status: Phase 2 — active development (APIs may still evolve)
+
+> If NylonME helps your agents remember things, a star on GitHub helps more people find it — that's the whole ask.
 
 NylonME models each memory as a braid of multiple "filaments" (fact / emotion / temporal / relation / confidence / frequency), with memory nodes connected by weighted edges in a mesh graph rather than a hierarchy. Retrieval is not top-k similarity matching but **context resonance**: starting from seed nodes, activation spreads across the graph proportional to edge strength x context match x real-time tension, bounded by a global activation budget (so high-fan-out nodes cannot explode the traversal). Unused memories decay along a tension forgetting curve instead of piling up forever.
 
@@ -70,6 +78,8 @@ The engine binary also serves a zero-install web console and REST API (default `
 ![NylonME Console](docs/ui-console.png)
 
 Seven views: **Overview** (stats, latest memories, activity stream, tension histogram), **Memories** (browse/filter with real-time tension), **Graph** (zero-dependency force-directed map of the memory web — the engine's core narrative made visible), **Resonate** (debug queries: seeds, scores, adaptive depth) with a one-click answer-quality feedback bar that feeds idle reflection, **Weave** (single + session batch), **Audit**, and **Team** (key management + per-member activity). Node drawer includes a **Forget** action (tombstone via `DELETE /v1/nodes/{id}`). Same engine, same write path as gRPC/MCP. REST endpoints mirror the gRPC contract; spec: [docs/api/openapi.json](docs/api/openapi.json). Dark/light themes and an EN/中文 toggle are built in.
+
+The UI speaks plainly: **space** (tenant — the security boundary a key opens), **library** (owner — the resonance scope), **key** (the only credential) — see [docs/CONCEPTS.md](docs/CONCEPTS.md). Paste a key in the top bar and the identity chip instantly shows which space it opens, its scope, and your member alias (`GET /v1/whoami`); invalid keys light up red. No tenant/owner jargon required.
 
 ## Multi-tenancy & Auth
 
