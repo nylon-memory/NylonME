@@ -1,6 +1,7 @@
 ---
 name: nylonme-memory
-description: Use the NylonME long-term memory engine (MCP tools memory_weave / memory_resonate / memory_get) to persist and recall project knowledge across sessions. Trigger proactively when the task involves "before / last time / previous decisions / pitfalls we hit", when a session starts and project context is needed, when a milestone is reached (benchmark scores, releases, deployments), when a technical decision is made, or when an environment gotcha is discovered.
+description: NylonME 长期记忆引擎的写入与召回规范，通过 MCP 工具 memory_weave / memory_resonate / memory_get 跨会话沉淀与召回项目记忆。当用户提到「之前、上次、记住、历史决策、踩过的坑」、会话开始需要项目上下文、达成里程碑（评测分数、版本发布、部署）、做出技术决策、或发现环境坑时触发。Long-term memory discipline for the NylonME engine — recalls project context at session start and when the user says "before / last time / remember", weaves decisions, milestones and environment gotchas as they happen.
+version: 1.0.0
 metadata:
   short-description: NylonME long-term memory write & recall discipline
 ---
@@ -34,3 +35,8 @@ If calls fail with 401 / UNAUTHENTICATED or "missing x-api-key", the engine has 
 - Each memory stands alone: include the subject, key numbers, dates, and paths, so it reads clearly without the conversation.
 - NEVER write secrets, passwords, or tokens themselves. "Where the key lives" (a pointer) is acceptable; the key is not.
 - Don't write transient state (in-progress tasks), facts derivable from the code, or chit-chat.
+
+## Verification
+
+- A successful weave returns `NODE_ID=<n>`; recall with related keywords afterwards and confirm the node shows up in the results.
+- If resonate returns empty unexpectedly, or calls fail with 401 / "missing x-api-key", check `NYLON_SERVER` / `NYLON_API_KEY` in the MCP server env (see the plugin README).
