@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "nylonme": {
+      "command": "nylon-engine",
+      "args": ["mcp"],
+      "env": {
+        "NYLON_OWNER": "default"
+      }
+    }
+  }
+}

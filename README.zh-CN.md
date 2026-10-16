@@ -59,6 +59,8 @@ Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。A
 
 **Codex 用户？** 免去手工接线——直接装 [NylonME Memory 插件](plugins/nylonme)（MCP 服务 + 教 Codex 何时回忆、何时编织的 skill），两条 CLI 命令或在 Codex 应用的插件页点装即可。
 
+**Qoder 用户？** 同样省心——在 Qoder 插件面板选择本地目录安装 [Qoder NylonME 插件](plugins/qoder-nylonme)，或执行 `qodercli plugin install --scope user <路径>`。如果你之前在 `~/.qoder/mcp.json` 手工配置过同名 MCP，请先删掉那条，避免同名冲突。
+
 三个词说清整个心智模型——**空间**（tenant，key 打开的安全边界）、**记忆库**（owner，记忆居住和联想的范围）、**钥匙**（唯一凭证）：[docs/CONCEPTS.zh-CN.md](docs/CONCEPTS.zh-CN.md) · [English](docs/CONCEPTS.md)。
 
 多机共享一份记忆库时，可选**远程桥接模式**：设 `NYLON_SERVER=host:50051`（可选 `NYLON_API_KEY`），MCP 调用会转发到远端引擎，本机不再内嵌引擎。
@@ -218,7 +220,7 @@ NylonME/
 │       └── nylon-engine  # 引擎入口 + gRPC 服务（tonic）
 ├── sdk/python/       # Python SDK（nylon-sdk）
 ├── integrations/     # LangChain / LlamaIndex 适配器
-├── plugins/          # DSH 等 Agent 平台插件
+├── plugins/          # Agent 平台插件（DSH、Codex、Qoder）
 ├── docs/             # 指南与 API 规范
 └── helm/             # Kubernetes 部署
 ```

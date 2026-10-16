@@ -59,6 +59,8 @@ Works with Claude Code, Cursor, Codex, VS Code Copilot and any MCP client. Your 
 
 **Using Codex?** Skip the manual wiring — install the [NylonME Memory plugin](plugins/nylonme) (MCP server + a skill that teaches Codex when to recall and what to weave) in two CLI commands, or from the Codex app's Plugins page.
 
+**Using Qoder?** Same idea — install the [Qoder NylonME plugin](plugins/qoder-nylonme) from the Qoder plugins panel (local directory) or `qodercli plugin install --scope user <path>`. If you previously wired `~/.qoder/mcp.json` by hand, remove that entry to avoid a same-name conflict.
+
 Three concepts cover the whole mental model — **space** (tenant, the security boundary your key opens), **library** (owner, where memories live and resonate), **key** (the only credential): [docs/CONCEPTS.md](docs/CONCEPTS.md) · [中文](docs/CONCEPTS.zh-CN.md).
 
 To share one memory store across machines, use optional **remote bridge mode**: set `NYLON_SERVER=host:50051` (optionally `NYLON_API_KEY`); MCP calls are forwarded to the remote engine and no engine is embedded locally.
@@ -218,7 +220,7 @@ NylonME/
 │       └── nylon-engine  # engine entrypoint + gRPC service (tonic)
 ├── sdk/python/       # Python SDK (nylon-sdk)
 ├── integrations/     # LangChain / LlamaIndex adapters
-├── plugins/          # DSH and other agent-platform plugins
+├── plugins/          # Agent-platform plugins (DSH, Codex, Qoder)
 ├── docs/             # guides and API spec
 └── helm/             # Kubernetes deployment
 ```

@@ -1,0 +1,33 @@
+{
+  "name": "qoder-nylonme",
+  "displayName": "NylonME Memory",
+  "version": "1.0.0",
+  "description": "Long-term memory for Qoder via the NylonME memory engine — recall project context at session start, weave decisions and pitfalls as they happen.",
+  "descriptionZh": "基于 NylonME 记忆引擎为 Qoder 提供长期记忆——会话开始自动回忆项目上下文，里程碑与坑随手沉淀，跨会话、跨机器、跨工具不丢。",
+  "author": {
+    "name": "NylonME",
+    "url": "https://github.com/nylon-memory/NylonME"
+  },
+  "homepage": "https://github.com/nylon-memory/NylonME/tree/main/plugins/qoder-nylonme",
+  "repository": "https://github.com/nylon-memory/NylonME",
+  "license": "Apache-2.0",
+  "keywords": ["qoder-plugin", "memory", "long-term-memory", "mcp", "agent"],
+  "category": "Productivity",
+  "tags": ["memory", "mcp", "long-term-memory"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "NylonME Memory",
+    "shortDescription": "Long-term memory for Qoder — remember across sessions",
+    "longDescription": "Gives Qoder a persistent memory backed by the NylonME memory engine. Qoder recalls relevant project context at session start (memory_resonate) and weaves decisions, milestones and environment pitfalls at milestones (memory_weave), so knowledge survives across sessions, machines and tools. Runs fully local (embedded engine, data in ~/.nylonme/data) or against a shared team engine via NYLON_SERVER.",
+    "developerName": "NylonME",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://www.nylonme.com",
+    "defaultPrompt": [
+      "回忆一下这个项目最近的里程碑和踩过的坑",
+      "把今天这个决定和理由存进记忆",
+      "What did we decide about the storage layer last time?"
+    ]
+  }
+}

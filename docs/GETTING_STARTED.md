@@ -200,6 +200,8 @@ args = ["mcp"]
 NYLON_OWNER = "my-project"
 ```
 
+Qoder / Qoder CN — install the [NylonME Memory plugin](../plugins/qoder-nylonme) from the plugin panel (local directory: `plugins/qoder-nylonme`) or `qodercli plugin install --scope user <path>`; or wire `~/.qoder/mcp.json` by hand with the same `mcpServers.nylonme` block as above.
+
 The agent then gets three tools: `memory_weave` (persist a fact), `memory_resonate` (recall related memories), `memory_get` (read a node by id).
 
 ### Zero-binary option: the `/mcp` HTTP endpoint
