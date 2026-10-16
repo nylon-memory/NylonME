@@ -127,7 +127,7 @@ Any tool that can run a shell command or speak gRPC can use NylonME:
 
 - **Shell-capable agents** (Codex, Cursor, Aider, scripts): call `nylon_cli` with `NYLON_SERVER` pointing at the engine. Recall at task start, weave at milestones.
 - **gRPC-native integrations**: the contract is [proto/nylon/v1/memory.proto](../proto/nylon/v1/memory.proto) — `Weave`, `WeaveSession`, `Resonate`, `Search`, `GetNode`.
-- **Codex users**: see the `nylonme-memory` plugin pattern — a small skill that teaches the agent when to recall and what to persist. The same pattern ports to any agent framework with custom instructions.
+- **Codex users**: install the [NylonME Memory plugin](../plugins/nylonme) — MCP tools plus a skill that teaches Codex when to recall and what to persist, in two commands (see below). The same plugin pattern ports to any agent framework with custom instructions.
 
 Good facts are self-contained sentences with names, numbers, and paths. Never weave secrets (API keys, passwords).
 
@@ -179,7 +179,17 @@ Cursor / VS Code (`.cursor/mcp.json` or MCP settings):
 }
 ```
 
-Codex (`~/.codex/config.toml`):
+Codex — fastest path is the plugin (MCP server + recall/weave skill in one install):
+
+```bash
+git clone https://github.com/nylon-memory/NylonME.git
+codex plugin marketplace add ./NylonME
+codex plugin add nylonme@nylonme
+```
+
+Requires `nylon-engine` on your PATH (from [Releases](https://github.com/nylon-memory/NylonME/releases)); details and team-engine setup in [plugins/nylonme/README.md](../plugins/nylonme/README.md).
+
+Or wire the MCP server by hand (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.nylonme]

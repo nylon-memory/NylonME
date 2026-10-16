@@ -1,0 +1,20 @@
+{
+  "name": "nylonme",
+  "interface": {
+    "displayName": "NylonME"
+  },
+  "plugins": [
+    {
+      "name": "nylonme",
+      "source": {
+        "source": "local",
+        "path": "./plugins/nylonme"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

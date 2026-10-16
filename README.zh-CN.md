@@ -57,6 +57,8 @@ LongMemEval-S（100 实例切片，deepseek-v4-pro 作答）：证据召回 any-
 
 Claude Code、Cursor、Codex、VS Code Copilot 等所有 MCP 客户端通用。Agent 会获得三个工具：`memory_weave`（沉淀事实）、`memory_resonate`（回忆相关记忆）、`memory_get`（按 ID 读取）。各客户端的详细配置见 [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)。
 
+**Codex 用户？** 免去手工接线——直接装 [NylonME Memory 插件](plugins/nylonme)（MCP 服务 + 教 Codex 何时回忆、何时编织的 skill），两条 CLI 命令或在 Codex 应用的插件页点装即可。
+
 三个词说清整个心智模型——**空间**（tenant，key 打开的安全边界）、**记忆库**（owner，记忆居住和联想的范围）、**钥匙**（唯一凭证）：[docs/CONCEPTS.zh-CN.md](docs/CONCEPTS.zh-CN.md) · [English](docs/CONCEPTS.md)。
 
 多机共享一份记忆库时，可选**远程桥接模式**：设 `NYLON_SERVER=host:50051`（可选 `NYLON_API_KEY`），MCP 调用会转发到远端引擎，本机不再内嵌引擎。
