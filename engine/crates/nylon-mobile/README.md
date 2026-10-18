@@ -51,3 +51,14 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
 
 - 嵌入/LLM 通道默认留空（端上模型接入前，共振走词面种子 + 图扩散）；
 - 端上为单租户（DEFAULT_TENANT）单 owner；CJK 关系丝抽取已在 core 层实现，两端行为一致。
+
+## CJK 查询分词（两端共用）
+
+中文查询无空格可切，`resonate` 选种时把含汉字的词项展开为**非停用单字 + 相邻二字组**
+（IDF 加权，稀有词权重显著更高；`的/了/吗/呢` 等停用字不参与，含停用字的二字组
+如「户的」直接跳过，避免撞上「用户的X」句式造成误命中）。无空格 CJK 整串 contains
+的旧行为已被取代——`nylon-service::EngineCore` 统一实现，服务端与端上结果一致。
+
+真机回归（荣耀 NTH-AN00 / aarch64，20 条中英混合记忆，WAL 跨进程恢复后）：
+8 个中文查询全部 top-1 命中目标记忆（「用户的猫」正确命中橘猫条目，此前被
+「用户的X」句式劫持），平均单次共振约 55µs。

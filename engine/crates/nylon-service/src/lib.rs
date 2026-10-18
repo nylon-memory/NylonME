@@ -102,6 +102,50 @@ const STOPWORDS: &[&str] = &[
     "in", "on", "at", "for", "with", "from", "by", "as", "into", "out", "up", "down",
 ];
 
+/// CJK 停用字：单字切词时剔除，避免高频虚字淹没稀有实体字。
+const CJK_STOPS: &[char] = &[
+    '的', '了', '在', '是', '我', '你', '他', '她', '它', '们', '这', '那', '有', '吗', '呢', '吧',
+    '啊', '哦', '么', '着', '过', '都', '不', '没', '就', '要', '会', '能', '很', '也', '和', '跟',
+    '与', '对', '把', '被', '让', '到', '从', '向', '于', '但', '而', '或', '及', '等',
+];
+
+/// 统一 CJK 判定（基本汉字区）。
+fn is_cjk(c: char) -> bool {
+    (0x4E00..=0x9FFF).contains(&(c as u32))
+}
+
+/// 查询词项展开：纯英文 token 原样返回；含汉字的 token 展开为二字组 + 非停用单字。
+/// 单字靠 IDF 分层：「用户」这类高频词权重被压低，「猫」这类稀有实体字成为召回主力；
+/// 二字组保留短语粒度（如「跑步」「杭州」）。中英文混合查询两路并行。
+fn cjk_terms(tok: &str) -> Vec<String> {
+    let chars: Vec<char> = tok.chars().collect();
+    if !chars.iter().any(|&c| is_cjk(c)) {
+        return vec![tok.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for &c in &chars {
+        if !is_cjk(c) || CJK_STOPS.contains(&c) {
+            continue;
+        }
+        let s = c.to_string();
+        if seen.insert(s.clone()) {
+            out.push(s);
+        }
+    }
+    for w in chars.windows(2) {
+        // 跨停用字的二字组（如「户的」）会撞上大量「用户的X」句式造成误命中，跳过。
+        if !(is_cjk(w[0]) && is_cjk(w[1])) || CJK_STOPS.contains(&w[0]) || CJK_STOPS.contains(&w[1]) {
+            continue;
+        }
+        let s = format!("{}{}", w[0], w[1]);
+        if seen.insert(s.clone()) {
+            out.push(s);
+        }
+    }
+    out
+}
+
 /// 启发式关系丝抽取：无 LLM / 无 context 时从原文提取内容标签。
 /// 英文：句中大写开头的专有名（人名/地名/机构）优先，其次长度 >=4 的非停用实词；
 /// 中文：无字母数字 token 时退化为 CJK 二字组（日常对话以中文为主，纯字母切分
@@ -1183,18 +1227,21 @@ impl EngineCore {
         // 词项化按非字母数字切分；CJK 查询无空格时退化为整串 contains，行为与原先一致。
         let mut lex_seeds: Vec<(u32, f32)> = Vec::new();
         if !query.is_empty() {
-            let mut terms: Vec<&str> = query
+            let mut terms: Vec<String> = query
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|t| !t.is_empty())
                 .filter(|t| t.len() >= 3 && !STOPWORDS.contains(t))
+                .flat_map(cjk_terms)
                 .collect();
             if terms.is_empty() {
                 // 全是停用词的查询（如 "When did they meet?"）：退回未过滤词项
                 terms = query
                     .split(|c: char| !c.is_alphanumeric())
                     .filter(|t| !t.is_empty())
+                    .flat_map(cjk_terms)
                     .collect();
             }
+            let terms: Vec<&str> = terms.iter().map(String::as_str).collect();
             // 第一遍：统计词项文档频率（df），IDF 加权——稀有词（实体）权重远高于常见词
             let owner_facts: Vec<(u32, String)> = g
                 .live_nodes()
@@ -1658,6 +1705,22 @@ mod tests {
         );
     }
 
+    /// 中文查询分词召回（真机测试发现：CJK 整串 contains 命不中同义表述）。
+    #[tokio::test]
+    async fn resonate_cjk_query_tokenized() {
+        let (core, _emb) = core_with_embed(64);
+        let cat_id = weave_as(&core, "tenant-a", "alice", "用户养了一只三岁的橘猫，叫咪咪").await;
+        let _other = weave_as(&core, "tenant-a", "alice", "用户每天早上七点起床跑步三公里").await;
+        let _other2 = weave_as(&core, "tenant-a", "alice", "用户的女朋友是小学老师，教语文").await;
+
+        let out = core.resonate("tenant-a", "alice", "用户的猫", None, 5).await.unwrap();
+        let ids: Vec<u64> = out.activated.iter().map(|n| n.node_id).collect();
+        assert!(ids.contains(&cat_id), "「用户的猫」应命中橘猫记忆: {ids:?}");
+
+        let out2 = core.resonate("tenant-a", "alice", "早上跑步", None, 5).await.unwrap();
+        let ids2: Vec<u64> = out2.activated.iter().map(|n| n.node_id).collect();
+        assert!(out2.activated.iter().any(|n| n.filaments.fact.contains("跑步")), "「早上跑步」应命中跑步记忆: {ids2:?}");
+    }
     /// 中文对话的关系丝抽取（CJK 二字组兜底，端上与服务器共用行为）。
     #[test]
     fn heuristic_relations_cjk() {
@@ -1665,4 +1728,6 @@ mod tests {
         assert!(!rels.is_empty(), "CJK bigram relations should not be empty");
     }
 }
+
+
 

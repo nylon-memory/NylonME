@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 uniffi = "0.29"
@@ -15,4 +15,5 @@ nylon-graph = { path = "../nylon-graph" }
 nylon-service = { path = "../nylon-service" }
 nylon-storage = { path = "../nylon-storage" }
 tokio = { version = "1", features = ["rt"] }
+
 
