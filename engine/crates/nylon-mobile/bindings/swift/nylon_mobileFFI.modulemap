@@ -1,0 +1,7 @@
+module nylon_mobileFFI {
+    header "nylon_mobileFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

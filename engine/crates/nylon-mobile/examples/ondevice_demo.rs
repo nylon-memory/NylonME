@@ -54,6 +54,8 @@ fn open(dir: &str, model: Option<&str>, vocab: Option<&str>) -> Arc<MobileEngine
         owner: "demo-user".into(),
         embed_model_path: model.map(str::to_string),
         embed_vocab_path: vocab.map(str::to_string),
+        auto_checkpoint_writes: None,
+        auto_checkpoint_secs: None,
     })
     .unwrap_or_else(|e| {
         eprintln!("open failed: {e}");

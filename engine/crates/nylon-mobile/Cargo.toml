@@ -22,3 +22,10 @@ tokio = { version = "1", features = ["rt"] }
 [features]
 # 端上 ONNX 嵌入（tract 推理 + 纯 Rust WordPiece 分词）
 onnx = ["nylon-embed/onnx"]
+# 绑定生成 CLI（仅生成机需要，不进 App 产物）
+bindgen-cli = ["uniffi/cli"]
+
+[[bin]]
+name = "gen-bindings"
+path = "src/bin/gen_bindings.rs"
+required-features = ["bindgen-cli"]

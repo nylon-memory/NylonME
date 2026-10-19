@@ -1564,6 +1564,13 @@ impl EngineCore {
             .checkpoint()
             .map_err(|e| CoreError::Internal(format!("checkpoint: {e}")))
     }
+
+    /// 内存 delta 合并进 CSR（纯内存操作，供端上 shutdown/低内存前整理）。
+    pub fn compact(&self) -> Result<(), CoreError> {
+        let mut inner = lock(&self.inner)?;
+        inner.store.compact();
+        Ok(())
+    }
 }
 
 #[cfg(test)]

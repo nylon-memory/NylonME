@@ -29,6 +29,11 @@ pub struct MobileConfig {
     pub embed_model_path: Option<String>,
     /// WordPiece 词表 vocab.txt 路径（随模型分发）。
     pub embed_vocab_path: Option<String>,
+    /// 自动 checkpoint 写阈值：累计 N 次 weave 后自动落盘（None=默认 32，Some(0)=关闭）。
+    /// 端上进程可能随时被杀，该阈值决定 WAL 重放时长与崩溃恢复成本的上界。
+    pub auto_checkpoint_writes: Option<u32>,
+    /// 自动 checkpoint 时间阈值：距上次落盘超过 T 秒且有脏写即触发（None=默认 300，Some(0)=每次写后都触发）。
+    pub auto_checkpoint_secs: Option<u64>,
 }
 
 /// resonate 返回的激活记忆。
@@ -82,6 +87,12 @@ fn map_err(e: CoreError) -> MobileError {
     }
 }
 
+/// 生命周期自动落盘状态（脏写计数 + 上次落盘时间）。
+struct LifecycleState {
+    dirty_writes: u32,
+    last_checkpoint: std::time::Instant,
+}
+
 /// 移动端记忆引擎句柄。App 侧单例持有，线程安全。
 ///
 /// 内部持有单线程 tokio runtime 驱动 EngineCore 的异步方法（WAL 持久化
@@ -92,6 +103,9 @@ pub struct MobileEngine {
     core: EngineCore,
     owner: String,
     rt: tokio::runtime::Runtime,
+    lifecycle: std::sync::Mutex<LifecycleState>,
+    max_dirty_writes: u32,
+    max_dirty_secs: u64,
 }
 
 #[cfg(feature = "onnx")]
@@ -153,6 +167,12 @@ impl MobileEngine {
             core,
             owner: config.owner,
             rt,
+            lifecycle: std::sync::Mutex::new(LifecycleState {
+                dirty_writes: 0,
+                last_checkpoint: std::time::Instant::now(),
+            }),
+            max_dirty_writes: config.auto_checkpoint_writes.unwrap_or(32),
+            max_dirty_secs: config.auto_checkpoint_secs.unwrap_or(300),
         }))
     }
 
@@ -171,7 +191,7 @@ impl MobileEngine {
             emotion_valence,
             max_hops: None,
         });
-        self.rt
+        let id = self.rt
             .block_on(async {
                 self.core
                     .weave_one(
@@ -184,7 +204,9 @@ impl MobileEngine {
                     .await
             })
             .map(|o| o.node_id)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        self.maybe_auto_checkpoint();
+        Ok(id)
     }
 
     /// 情境共振召回。
@@ -239,6 +261,42 @@ impl MobileEngine {
     pub fn checkpoint(&self) -> Result<(), MobileError> {
         self.core.checkpoint().map_err(map_err)
     }
+
+    /// 关闭引擎：compact 内存 delta 后 checkpoint 落盘。
+    /// 供 App onDestroy / 主动释放实例前调用；进程被系统直接杀死时
+    /// 数据由 WAL + 自动 checkpoint 兜底，不依赖本方法。
+    pub fn shutdown(&self) -> Result<(), MobileError> {
+        self.core.compact().map_err(map_err)?;
+        self.checkpoint()
+    }
+}
+
+impl MobileEngine {
+    /// 惰性自动 checkpoint：脏写达到阈值，或距上次落盘超时且有脏写时触发。
+    /// 惰性（挂在 weave 后检查）而非后台定时器——端上 current_thread runtime
+    /// 不适合常驻任务，且 App 被杀时反正由 WAL 兜底。
+    /// 失败静默（下次 weave 再试）：WAL 已保证不丢数据，checkpoint 只影响恢复时长。
+    fn maybe_auto_checkpoint(&self) {
+        let should = {
+            let mut st = match self.lifecycle.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            st.dirty_writes += 1;
+            let hit_writes = self.max_dirty_writes > 0 && st.dirty_writes >= self.max_dirty_writes;
+            let hit_time = st.last_checkpoint.elapsed().as_secs() >= self.max_dirty_secs;
+            if hit_writes || hit_time {
+                st.dirty_writes = 0;
+                st.last_checkpoint = std::time::Instant::now();
+                true
+            } else {
+                false
+            }
+        };
+        if should {
+            let _ = self.core.checkpoint();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +314,8 @@ mod tests {
             owner: "tester".into(),
             embed_model_path: None,
             embed_vocab_path: None,
+            auto_checkpoint_writes: None,
+            auto_checkpoint_secs: None,
         })
             .unwrap();
         (e, dir)
@@ -270,6 +330,56 @@ mod tests {
         assert!(!hits.is_empty());
         assert!(hits.iter().any(|h| h.fact.contains("oat milk")));
         e.checkpoint().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_engine_cfg(writes: Option<u32>, secs: Option<u64>) -> (Arc<MobileEngine>, String) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = format!("{}/nylon-mobile-test-{unique}", std::env::temp_dir().display());
+        let e = MobileEngine::new(MobileConfig {
+            data_dir: dir.clone(),
+            owner: "tester".into(),
+            embed_model_path: None,
+            embed_vocab_path: None,
+            auto_checkpoint_writes: writes,
+            auto_checkpoint_secs: secs,
+        })
+        .unwrap();
+        (e, dir)
+    }
+
+    fn wal_len(dir: &str) -> u64 {
+        std::fs::metadata(format!("{dir}/wal.log")).map(|m| m.len()).unwrap_or(0)
+    }
+
+    #[test]
+    fn auto_checkpoint_by_write_threshold() {
+        let (e, dir) = temp_engine_cfg(Some(2), None);
+        e.weave("第一条记忆".into(), None, None).unwrap();
+        assert!(wal_len(&dir) > 0, "1 次写后 WAL 非空");
+        e.weave("第二条记忆".into(), None, None).unwrap();
+        assert_eq!(wal_len(&dir), 0, "达到写阈值后 WAL 应被自动截断");
+        assert_eq!(e.node_count().unwrap(), 2, "checkpoint 后数据完整");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_checkpoint_by_time_threshold() {
+        let (e, dir) = temp_engine_cfg(None, Some(0));
+        e.weave("时间触发".into(), None, None).unwrap();
+        assert_eq!(wal_len(&dir), 0, "secs=0 时每次写后都落盘");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_compacts_and_checkpoints() {
+        let (e, dir) = temp_engine_cfg(None, None);
+        e.weave("关机前的一条记忆".into(), None, None).unwrap();
+        e.shutdown().unwrap();
+        assert_eq!(wal_len(&dir), 0, "shutdown 后 WAL 应已截断");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

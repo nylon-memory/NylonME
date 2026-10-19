@@ -19,6 +19,7 @@ NylonME 记忆引擎的移动端进程内绑定（UniFFI）。Android（Kotlin�
 | `get(local_id)` | 读单条记忆 |
 | `node_count()` | 记忆条数 |
 | `checkpoint()` | 主动落盘（App 退后台时调用） |
+| `shutdown()` | compact + 落盘（App 销毁实例前调用；进程被杀由 WAL 兜底） |
 
 ## 构建
 
@@ -50,7 +51,9 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
    - 宿主语义冒烟：`cargo run -p nylon-embed --example onnx_smoke --features onnx -- <model> <vocab>`；
    - 真机：`cargo build -p nylon-mobile --example ondevice_demo --target aarch64-linux-android --release --features onnx`，
      `ondevice_demo <dir> <1|2> <model.onnx> <vocab.txt>`。
-3. **生命周期**：checkpoint 挂接 App onPause/onMemoryWarning；WAL 恢复开箱即用；
+3. ~~生命周期~~ **已完成**：自动 checkpoint（默认 32 写/300s 脏触发，`autoCheckpoint*` 可调）+
+   `shutdown()`（compact+落盘）；WAL 恢复开箱即用；Kotlin/Swift 绑定生成与 App 侧
+   挂接样例（onStop→checkpoint / onDestroy→shutdown）见 `INTEGRATION.md`；
 4. **CI**：release workflow 增加 Android/iOS target 与绑定产物发布。
 
 ## 与服务的差异说明
