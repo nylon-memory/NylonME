@@ -11,9 +11,14 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 uniffi = "0.29"
 nylon-core = { path = "../nylon-core" }
+nylon-embed = { path = "../nylon-embed" }
 nylon-graph = { path = "../nylon-graph" }
 nylon-service = { path = "../nylon-service" }
 nylon-storage = { path = "../nylon-storage" }
 tokio = { version = "1", features = ["rt"] }
 
 
+
+[features]
+# 端上 ONNX 嵌入（tract 推理 + 纯 Rust WordPiece 分词）
+onnx = ["nylon-embed/onnx"]

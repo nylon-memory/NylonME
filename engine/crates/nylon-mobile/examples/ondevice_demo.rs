@@ -1,6 +1,6 @@
 //! 端上真机冒烟测试：通过 MobileEngine 公开 API 走完整链路。
 //!
-//! 用法: ondevice_demo <data_dir> <phase>
+//! 用法: ondevice_demo <data_dir> <phase> [model.onnx vocab.txt]
 //!   phase 1 = 编织一批中英混合日常对话记忆 + checkpoint
 //!   phase 2 = 重新打开库（验证 WAL/快照跨进程恢复），resonate 查询并打印耗时
 //!
@@ -45,10 +45,12 @@ const QUERIES: &[&str] = &[
     "周五晚上",
 ];
 
-fn open(dir: &str) -> Arc<MobileEngine> {
+fn open(dir: &str, model: Option<&str>, vocab: Option<&str>) -> Arc<MobileEngine> {
     MobileEngine::new(MobileConfig {
         data_dir: dir.into(),
         owner: "demo-user".into(),
+        embed_model_path: model.map(str::to_string),
+        embed_vocab_path: vocab.map(str::to_string),
     })
     .unwrap_or_else(|e| {
         eprintln!("open failed: {e}");
@@ -72,8 +74,8 @@ fn dir_stats(dir: &str) -> (usize, u64) {
     (files, bytes)
 }
 
-fn phase1(dir: &str) {
-    let engine = open(dir);
+fn phase1(dir: &str, model: Option<&str>, vocab: Option<&str>) {
+    let engine = open(dir, model, vocab);
     let t0 = Instant::now();
     for (i, f) in FACTS.iter().enumerate() {
         let t = Instant::now();
@@ -96,8 +98,8 @@ fn phase1(dir: &str) {
     );
 }
 
-fn phase2(dir: &str) {
-    let engine = open(dir);
+fn phase2(dir: &str, model: Option<&str>, vocab: Option<&str>) {
+    let engine = open(dir, model, vocab);
     println!("store reopened (WAL/snapshot restore ok)");
     let count = engine.node_count().unwrap();
     println!("node_count = {count} (expect {})", FACTS.len());
@@ -122,13 +124,15 @@ fn phase2(dir: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: ondevice_demo <data_dir> <1|2>");
+        eprintln!("usage: ondevice_demo <data_dir> <1|2> [model.onnx vocab.txt]");
         std::process::exit(2);
     }
     let dir = args[1].clone();
+    let model = args.get(3).map(String::as_str);
+    let vocab = args.get(4).map(String::as_str);
     match args[2].as_str() {
-        "1" => phase1(&dir),
-        "2" => phase2(&dir),
+        "1" => phase1(&dir, model, vocab),
+        "2" => phase2(&dir, model, vocab),
         other => {
             eprintln!("unknown phase: {other}");
             std::process::exit(2);

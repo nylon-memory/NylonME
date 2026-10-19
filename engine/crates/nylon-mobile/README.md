@@ -13,7 +13,7 @@ NylonME 记忆引擎的移动端进程内绑定（UniFFI）。Android（Kotlin�
 
 | 方法 | 说明 |
 | --- | --- |
-| `MobileEngine.new(config)` | 打开/创建本地记忆库（App 沙箱目录） |
+| `MobileEngine.new(config)` | 打开/创建本地记忆库（App 沙箱目录；`embed_model_path`/`embed_vocab_path` 可选启用端上嵌入） |
 | `weave(fact, task?, emotion?)` | 编织记忆，返回 node_id |
 | `resonate(query, budget)` | 情境共振召回 |
 | `get(local_id)` | 读单条记忆 |
@@ -43,13 +43,19 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
 ## 路线图（骨架 -> 产品）
 
 1. ~~逻辑对齐~~ **已完成**：逻辑抽至 `nylon-service::EngineCore`，服务端（gRPC）与端上共用同一份编织/共振/检索实现，本 crate 为薄绑定；
-2. **端上嵌入**：新增 `OnnxEmbedder`（tract + 量化小模型），dims 须与索引维度一致，换模型需重嵌；
+2. ~~端上嵌入~~ **已完成**：`OnnxEmbedder`（tract 0.23 推理 + 纯 Rust WordPiece 分词，feature `onnx`），
+   dims 从模型输出形状自动推断（bge-small-zh-v1.5 为 512）；换模型维度不同需重建记忆库；
+   - 模型准备：Xenova/bge-small-zh-v1.5 量化版 + BAAI vocab.txt，量化模型须先剥 value_info
+     （`python scripts/prepare_onnx_model.py`，否则 tract 无法调和符号形状）；
+   - 宿主语义冒烟：`cargo run -p nylon-embed --example onnx_smoke --features onnx -- <model> <vocab>`；
+   - 真机：`cargo build -p nylon-mobile --example ondevice_demo --target aarch64-linux-android --release --features onnx`，
+     `ondevice_demo <dir> <1|2> <model.onnx> <vocab.txt>`。
 3. **生命周期**：checkpoint 挂接 App onPause/onMemoryWarning；WAL 恢复开箱即用；
 4. **CI**：release workflow 增加 Android/iOS target 与绑定产物发布。
 
 ## 与服务的差异说明
 
-- 嵌入/LLM 通道默认留空（端上模型接入前，共振走词面种子 + 图扩散）；
+- 嵌入通道可选：`MobileConfig.embed_model_path` + `embed_vocab_path` 成对提供即启用端上 ONNX 语义通道，否则词面种子 + 图扩散；LLM 通道端上留空；
 - 端上为单租户（DEFAULT_TENANT）单 owner；CJK 关系丝抽取已在 core 层实现，两端行为一致。
 
 ## CJK 查询分词（两端共用）

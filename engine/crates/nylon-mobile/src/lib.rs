@@ -24,6 +24,11 @@ pub struct MobileConfig {
     pub data_dir: String,
     /// 记忆归属者 ID（单用户 App 固定一个即可；多账号切换时换 owner）。
     pub owner: String,
+    /// 端上 ONNX 嵌入模型路径（可选；与 embed_vocab_path 成对提供）。
+    /// 注意：启用后 dims 由模型决定，与存量不同维度的库不兼容——换模型需重建记忆库。
+    pub embed_model_path: Option<String>,
+    /// WordPiece 词表 vocab.txt 路径（随模型分发）。
+    pub embed_vocab_path: Option<String>,
 }
 
 /// resonate 返回的激活记忆。
@@ -89,6 +94,33 @@ pub struct MobileEngine {
     rt: tokio::runtime::Runtime,
 }
 
+#[cfg(feature = "onnx")]
+fn build_onnx_embedder(
+    model: &str,
+    vocab: &str,
+) -> Result<Arc<dyn nylon_embed::Embedder>, MobileError> {
+    let emb = nylon_embed::OnnxEmbedder::new(
+        model,
+        vocab,
+        128,
+        nylon_embed::Pooling::Cls,
+    )
+    .map_err(|e| MobileError::Io {
+        message: format!("load embedder {model}: {e}"),
+    })?;
+    Ok(Arc::new(emb))
+}
+
+#[cfg(not(feature = "onnx"))]
+fn build_onnx_embedder(
+    _model: &str,
+    _vocab: &str,
+) -> Result<Arc<dyn nylon_embed::Embedder>, MobileError> {
+    Err(MobileError::Io {
+        message: "embedder paths provided but nylon-mobile built without feature `onnx`".into(),
+    })
+}
+
 #[uniffi::export]
 impl MobileEngine {
     /// 打开（或创建）本地记忆库。
@@ -97,9 +129,22 @@ impl MobileEngine {
         let store = PersistentGraph::open(&config.data_dir).map_err(|e| MobileError::Io {
             message: format!("open {}: {e}", config.data_dir),
         })?;
-        // 端上默认无嵌入/LLM 通道：heuristic 编织 + 词面/图扩散共振；
-        // 端上嵌入模型（OnnxEmbedder）接入后在此注入。
-        let core = EngineCore::new(store, nylon_service::DEFAULT_EMBED_DIMS, None, None);
+        // 提供了模型路径则启用端上 ONNX 嵌入（语义通道）；否则词面种子 + 图扩散。
+        let embedder: Option<Arc<dyn nylon_embed::Embedder>> =
+            match (&config.embed_model_path, &config.embed_vocab_path) {
+                (Some(model), Some(vocab)) => Some(build_onnx_embedder(model, vocab)?),
+                (None, None) => None,
+                _ => {
+                    return Err(MobileError::Io {
+                        message: "embed_model_path 与 embed_vocab_path 必须成对提供".into(),
+                    })
+                }
+            };
+        let dims = embedder
+            .as_ref()
+            .map(|e| e.dims())
+            .unwrap_or(nylon_service::DEFAULT_EMBED_DIMS);
+        let core = EngineCore::new(store, dims, embedder, None);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -206,7 +251,12 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = format!("{}/nylon-mobile-test-{unique}", std::env::temp_dir().display());
-        let e = MobileEngine::new(MobileConfig { data_dir: dir.clone(), owner: "tester".into() })
+        let e = MobileEngine::new(MobileConfig {
+            data_dir: dir.clone(),
+            owner: "tester".into(),
+            embed_model_path: None,
+            embed_vocab_path: None,
+        })
             .unwrap();
         (e, dir)
     }

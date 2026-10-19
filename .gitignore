@@ -11,3 +11,6 @@ __pycache__/
 *.egg-info/
 build/
 sdk/python/dist/
+
+# 端上嵌入模型文件（体积大，不入库，由 App 侧分发）
+engine/models/
