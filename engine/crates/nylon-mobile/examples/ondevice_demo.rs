@@ -43,6 +43,9 @@ const QUERIES: &[&str] = &[
     "女朋友",
     "日本",
     "周五晚上",
+    // 纯语义查询：与目标记忆零字面重叠，只有嵌入通道能召回
+    "家里养了宠物吗",
+    "失眠怎么办",
 ];
 
 fn open(dir: &str, model: Option<&str>, vocab: Option<&str>) -> Arc<MobileEngine> {

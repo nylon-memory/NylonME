@@ -68,3 +68,8 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
 真机回归（荣耀 NTH-AN00 / aarch64，20 条中英混合记忆，WAL 跨进程恢复后）：
 8 个中文查询全部 top-1 命中目标记忆（「用户的猫」正确命中橘猫条目，此前被
 「用户的X」句式劫持），平均单次共振约 55µs。
+
+端上语义通道回归（同机，feature `onnx` + bge-small-zh-v1.5 量化模型 24MB）：
+10 个查询全部 top-1 正确，其中纯语义探针「家里养了宠物吗」（与目标记忆零字面重叠）
+正确命中橘猫条目——嵌入通道在端上真实生效。单次共振约 0.3–1.2s（含查询嵌入，
+Snapdragon 778G 级 CPU），weave 单条约 0.3–1.1s；WAL 跨进程恢复正常（512 维向量）。
