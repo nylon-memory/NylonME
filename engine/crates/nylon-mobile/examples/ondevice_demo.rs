@@ -84,12 +84,10 @@ fn phase1(dir: &str, model: Option<&str>, vocab: Option<&str>) {
     let t0 = Instant::now();
     for (i, f) in FACTS.iter().enumerate() {
         let t = Instant::now();
-        let id = engine
-            .weave(f.to_string(), None, None)
-            .unwrap_or_else(|e| {
-                eprintln!("weave[{i}] failed: {e}");
-                std::process::exit(1);
-            });
+        let id = engine.weave(f.to_string(), None, None).unwrap_or_else(|e| {
+            eprintln!("weave[{i}] failed: {e}");
+            std::process::exit(1);
+        });
         println!("weave[{i:02}] id={id} took {:?}", t.elapsed());
     }
     let tc = Instant::now();
@@ -119,11 +117,21 @@ fn phase2(dir: &str, model: Option<&str>, vocab: Option<&str>) {
         total += el;
         let top: Vec<String> = hits
             .iter()
-            .map(|h| format!("{:.2}|{}", h.resonance, h.fact.chars().take(24).collect::<String>()))
+            .map(|h| {
+                format!(
+                    "{:.2}|{}",
+                    h.resonance,
+                    h.fact.chars().take(24).collect::<String>()
+                )
+            })
             .collect();
         println!("resonate[{q}] {el:?} -> {top:?}");
     }
-    println!("phase2 done: {} queries, avg {:?}", QUERIES.len(), total / QUERIES.len() as u32);
+    println!(
+        "phase2 done: {} queries, avg {:?}",
+        QUERIES.len(),
+        total / QUERIES.len() as u32
+    );
 }
 
 fn main() {

@@ -6,9 +6,9 @@
 //! 引擎通过 NYLON_EMBED_URL / NYLON_EMBED_MODEL / NYLON_EMBED_DIMS 配置；
 //! 未配置时嵌入通道关闭（行为与 Phase 1 一致）。
 
-pub mod wordpiece;
 #[cfg(feature = "onnx")]
 mod onnx;
+pub mod wordpiece;
 #[cfg(feature = "onnx")]
 pub use onnx::{OnnxEmbedder, Pooling};
 

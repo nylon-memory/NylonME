@@ -423,12 +423,16 @@ pub fn keys_revoke(path: &std::path::Path, key_or_prefix: &str) -> Result<String
                 .filter(|e| e.get("key").and_then(|k| k.as_str()) != Some(doomed.as_str()))
                 .collect();
             if kept.is_empty() {
-                return Err("不能吊销最后一把 key（真想开放模式请删掉 NYLON_API_KEYS_FILE 配置）".into());
+                return Err(
+                    "不能吊销最后一把 key（真想开放模式请删掉 NYLON_API_KEYS_FILE 配置）".into(),
+                );
             }
             write_keys_file(path, &serde_json::Value::Array(kept))?;
             Ok(doomed)
         }
-        n => Err(format!("前缀 {key_or_prefix} 匹配到 {n} 把 key，请给出更长前缀")),
+        n => Err(format!(
+            "前缀 {key_or_prefix} 匹配到 {n} 把 key，请给出更长前缀"
+        )),
     }
 }
 

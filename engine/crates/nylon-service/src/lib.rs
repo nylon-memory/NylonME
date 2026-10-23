@@ -135,7 +135,8 @@ fn cjk_terms(tok: &str) -> Vec<String> {
     }
     for w in chars.windows(2) {
         // 跨停用字的二字组（如「户的」）会撞上大量「用户的X」句式造成误命中，跳过。
-        if !(is_cjk(w[0]) && is_cjk(w[1])) || CJK_STOPS.contains(&w[0]) || CJK_STOPS.contains(&w[1]) {
+        if !(is_cjk(w[0]) && is_cjk(w[1])) || CJK_STOPS.contains(&w[0]) || CJK_STOPS.contains(&w[1])
+        {
             continue;
         }
         let s = format!("{}{}", w[0], w[1]);
@@ -156,7 +157,9 @@ fn heuristic_relations(text: &str) -> Vec<String> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let has_alpha = text.chars().any(|c| c.is_ascii_alphanumeric());
     if !has_alpha {
-        let mut chars = text.chars().filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation());
+        let mut chars = text
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation());
         let mut prev = chars.next();
         while let (Some(a), Some(b)) = (prev, chars.next()) {
             prev = Some(b);
@@ -663,8 +666,7 @@ impl EngineCore {
         let events: Vec<&SessionEventIn> = events.iter().filter(|e| !e.text.is_empty()).collect();
         // 叶子层：逐事件原文（启发式路径，与验证过的双层实验口径一致）
         let mut leaf_nodes: Vec<LeafNodeCore> = Vec::new();
-        let mut id2local: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        let mut id2local: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for ev in &events {
             let raw = format!("{}: {}", ev.speaker, ev.text);
             let outcome = self
@@ -694,8 +696,7 @@ impl EngineCore {
                         }
                     })
                     .collect();
-                for (fact, sources) in
-                    extract_session_facts(llm.as_ref(), &lines.join("\n")).await
+                for (fact, sources) in extract_session_facts(llm.as_ref(), &lines.join("\n")).await
                 {
                     let outcome = self
                         .weave_one(tenant_id, owner_id, &fact, None, WeaveLlmMode::Off)
@@ -717,8 +718,7 @@ impl EngineCore {
                 {
                     let bridges =
                         extract_commonsense_bridges(llm.as_ref(), &lines.join("\n")).await;
-                    let fact_ids: Vec<u32> =
-                        fact_nodes.iter().map(|f| f.node_id as u32).collect();
+                    let fact_ids: Vec<u32> = fact_nodes.iter().map(|f| f.node_id as u32).collect();
                     for bridge in bridges {
                         let ctx = Some(ContextSpectrum {
                             task: Some(WORLD_KNOWLEDGE_TAG.to_string()),
@@ -790,10 +790,7 @@ impl EngineCore {
 }
 
 /// 空闲反思批处理：常识桥接 + 画像节点（服务层反思 worker 空闲窗口调用）。
-pub async fn process_reflection_jobs(
-    core: &EngineCore,
-    jobs: Vec<ReflectionJob>,
-) {
+pub async fn process_reflection_jobs(core: &EngineCore, jobs: Vec<ReflectionJob>) {
     let Some(llm) = core.llm.clone() else { return };
     for job in jobs {
         if job.fact_ids.is_empty() {
@@ -804,12 +801,7 @@ pub async fn process_reflection_jobs(
             let mut wrote = 0usize;
             for bridge in bridges {
                 match core
-                    .write_world_bridge(
-                        &job.tenant_id,
-                        &job.owner_id,
-                        &job.fact_ids,
-                        bridge,
-                    )
+                    .write_world_bridge(&job.tenant_id, &job.owner_id, &job.fact_ids, bridge)
                     .await
                 {
                     Ok(()) => wrote += 1,
@@ -1379,8 +1371,7 @@ impl EngineCore {
         // 种子保底：直接命中的种子提升置顶（取重排后种子的相对顺序），
         // 防止词面/向量双通道的精确命中被高张力扩散邻居挤出 Top-K
         if seed_quota > 0 {
-            let seed_set: std::collections::HashSet<u32> =
-                seeds.iter().map(|&(s, _)| s).collect();
+            let seed_set: std::collections::HashSet<u32> = seeds.iter().map(|&(s, _)| s).collect();
             let mut hoisted: Vec<(u32, f32)> = Vec::new();
             let mut rest: Vec<(u32, f32)> = Vec::with_capacity(activated.len());
             for item in activated {
@@ -1693,15 +1684,33 @@ mod tests {
                 ..Default::default()
             })
         };
-        core.weave_one("tenant-a", "alice", "手冲咖啡笔记", ctx(), WeaveLlmMode::Full)
-            .await
-            .unwrap();
-        core.weave_one("tenant-b", "alice", "手冲咖啡笔记", ctx(), WeaveLlmMode::Full)
-            .await
-            .unwrap();
+        core.weave_one(
+            "tenant-a",
+            "alice",
+            "手冲咖啡笔记",
+            ctx(),
+            WeaveLlmMode::Full,
+        )
+        .await
+        .unwrap();
+        core.weave_one(
+            "tenant-b",
+            "alice",
+            "手冲咖啡笔记",
+            ctx(),
+            WeaveLlmMode::Full,
+        )
+        .await
+        .unwrap();
         // 第三条与第一条同租户：只能链上第一条（第二条跨租户不可见）
         let out = core
-            .weave_one("tenant-a", "alice", "再来一条咖啡记录", ctx(), WeaveLlmMode::Full)
+            .weave_one(
+                "tenant-a",
+                "alice",
+                "再来一条咖啡记录",
+                ctx(),
+                WeaveLlmMode::Full,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1720,13 +1729,24 @@ mod tests {
         let _other = weave_as(&core, "tenant-a", "alice", "用户每天早上七点起床跑步三公里").await;
         let _other2 = weave_as(&core, "tenant-a", "alice", "用户的女朋友是小学老师，教语文").await;
 
-        let out = core.resonate("tenant-a", "alice", "用户的猫", None, 5).await.unwrap();
+        let out = core
+            .resonate("tenant-a", "alice", "用户的猫", None, 5)
+            .await
+            .unwrap();
         let ids: Vec<u64> = out.activated.iter().map(|n| n.node_id).collect();
         assert!(ids.contains(&cat_id), "「用户的猫」应命中橘猫记忆: {ids:?}");
 
-        let out2 = core.resonate("tenant-a", "alice", "早上跑步", None, 5).await.unwrap();
+        let out2 = core
+            .resonate("tenant-a", "alice", "早上跑步", None, 5)
+            .await
+            .unwrap();
         let ids2: Vec<u64> = out2.activated.iter().map(|n| n.node_id).collect();
-        assert!(out2.activated.iter().any(|n| n.filaments.fact.contains("跑步")), "「早上跑步」应命中跑步记忆: {ids2:?}");
+        assert!(
+            out2.activated
+                .iter()
+                .any(|n| n.filaments.fact.contains("跑步")),
+            "「早上跑步」应命中跑步记忆: {ids2:?}"
+        );
     }
     /// 中文对话的关系丝抽取（CJK 二字组兜底，端上与服务器共用行为）。
     #[test]
@@ -1735,6 +1755,3 @@ mod tests {
         assert!(!rels.is_empty(), "CJK bigram relations should not be empty");
     }
 }
-
-
-

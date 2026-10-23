@@ -17,19 +17,18 @@ async fn main() {
         std::process::exit(2);
     }
     let t0 = std::time::Instant::now();
-    let emb = OnnxEmbedder::new(&args[1], &args[2], 128, Pooling::Cls)
-        .unwrap_or_else(|e| {
-            eprintln!("load failed: {e}");
-            std::process::exit(1);
-        });
+    let emb = OnnxEmbedder::new(&args[1], &args[2], 128, Pooling::Cls).unwrap_or_else(|e| {
+        eprintln!("load failed: {e}");
+        std::process::exit(1);
+    });
     println!("model loaded in {:?}, dims={}", t0.elapsed(), emb.dims());
 
     let texts = [
-        "用户的猫",                             // query
-        "用户养了一只三岁的橘猫，叫咪咪",       // 语义相关
-        "我家咪咪最近胖了一圈",                 // 相关（猫=咪咪，无字面重叠）
-        "用户每天早上七点起床跑步三公里",       // 同前缀不同语义
-        "量子力学期末考试重点",                 // 无关
+        "用户的猫",                       // query
+        "用户养了一只三岁的橘猫，叫咪咪", // 语义相关
+        "我家咪咪最近胖了一圈",           // 相关（猫=咪咪，无字面重叠）
+        "用户每天早上七点起床跑步三公里", // 同前缀不同语义
+        "量子力学期末考试重点",           // 无关
     ];
     let t1 = std::time::Instant::now();
     let vecs = emb

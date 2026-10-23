@@ -37,8 +37,7 @@ pub struct MobileConfig {
 }
 
 /// resonate 返回的激活记忆。
-#[derive(uniffi::Record)]
-#[derive(Debug)]
+#[derive(uniffi::Record, Debug)]
 pub struct ActivatedMemory {
     pub local_id: u32,
     pub fact: String,
@@ -82,7 +81,9 @@ impl std::error::Error for MobileError {}
 fn map_err(e: CoreError) -> MobileError {
     match e {
         CoreError::NotFound(m) => MobileError::NotFound { message: m },
-        CoreError::Invalid(m) => MobileError::Io { message: format!("invalid argument: {m}") },
+        CoreError::Invalid(m) => MobileError::Io {
+            message: format!("invalid argument: {m}"),
+        },
         CoreError::Internal(m) => MobileError::Io { message: m },
     }
 }
@@ -113,15 +114,10 @@ fn build_onnx_embedder(
     model: &str,
     vocab: &str,
 ) -> Result<Arc<dyn nylon_embed::Embedder>, MobileError> {
-    let emb = nylon_embed::OnnxEmbedder::new(
-        model,
-        vocab,
-        128,
-        nylon_embed::Pooling::Cls,
-    )
-    .map_err(|e| MobileError::Io {
-        message: format!("load embedder {model}: {e}"),
-    })?;
+    let emb = nylon_embed::OnnxEmbedder::new(model, vocab, 128, nylon_embed::Pooling::Cls)
+        .map_err(|e| MobileError::Io {
+            message: format!("load embedder {model}: {e}"),
+        })?;
     Ok(Arc::new(emb))
 }
 
@@ -162,7 +158,9 @@ impl MobileEngine {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| MobileError::Io { message: format!("runtime: {e}") })?;
+            .map_err(|e| MobileError::Io {
+                message: format!("runtime: {e}"),
+            })?;
         Ok(Arc::new(Self {
             core,
             owner: config.owner,
@@ -184,14 +182,17 @@ impl MobileEngine {
         emotion_valence: Option<f32>,
     ) -> Result<u64, MobileError> {
         if fact.trim().is_empty() {
-            return Err(MobileError::Io { message: "fact is empty".into() });
+            return Err(MobileError::Io {
+                message: "fact is empty".into(),
+            });
         }
-        let ctx = (task.is_some() || emotion_valence.is_some()).then(|| ContextSpectrum {
+        let ctx = (task.is_some() || emotion_valence.is_some()).then_some(ContextSpectrum {
             task,
             emotion_valence,
             max_hops: None,
         });
-        let id = self.rt
+        let id = self
+            .rt
             .block_on(async {
                 self.core
                     .weave_one(
@@ -210,7 +211,11 @@ impl MobileEngine {
     }
 
     /// 情境共振召回。
-    pub fn resonate(&self, query: String, budget: u32) -> Result<Vec<ActivatedMemory>, MobileError> {
+    pub fn resonate(
+        &self,
+        query: String,
+        budget: u32,
+    ) -> Result<Vec<ActivatedMemory>, MobileError> {
         self.rt
             .block_on(async {
                 self.core
@@ -308,7 +313,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = format!("{}/nylon-mobile-test-{unique}", std::env::temp_dir().display());
+        let dir = format!(
+            "{}/nylon-mobile-test-{unique}",
+            std::env::temp_dir().display()
+        );
         let e = MobileEngine::new(MobileConfig {
             data_dir: dir.clone(),
             owner: "tester".into(),
@@ -317,14 +325,16 @@ mod tests {
             auto_checkpoint_writes: None,
             auto_checkpoint_secs: None,
         })
-            .unwrap();
+        .unwrap();
         (e, dir)
     }
 
     #[test]
     fn weave_and_resonate_roundtrip() {
         let (e, dir) = temp_engine();
-        let id = e.weave("User prefers oat milk latte".into(), None, None).unwrap();
+        let id = e
+            .weave("User prefers oat milk latte".into(), None, None)
+            .unwrap();
         assert!(e.get(id as u32).is_ok(), "weave 返回的 id 应可读回");
         let hits = e.resonate("oat milk".into(), 5).unwrap();
         assert!(!hits.is_empty());
@@ -338,7 +348,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = format!("{}/nylon-mobile-test-{unique}", std::env::temp_dir().display());
+        let dir = format!(
+            "{}/nylon-mobile-test-{unique}",
+            std::env::temp_dir().display()
+        );
         let e = MobileEngine::new(MobileConfig {
             data_dir: dir.clone(),
             owner: "tester".into(),
@@ -352,7 +365,9 @@ mod tests {
     }
 
     fn wal_len(dir: &str) -> u64 {
-        std::fs::metadata(format!("{dir}/wal.log")).map(|m| m.len()).unwrap_or(0)
+        std::fs::metadata(format!("{dir}/wal.log"))
+            .map(|m| m.len())
+            .unwrap_or(0)
     }
 
     #[test]
@@ -386,7 +401,8 @@ mod tests {
     #[test]
     fn cjk_weave_and_resonate() {
         let (e, dir) = temp_engine();
-        e.weave("我明天要去杭州出差见客户".into(), None, None).unwrap();
+        e.weave("我明天要去杭州出差见客户".into(), None, None)
+            .unwrap();
         let hits = e.resonate("杭州出差".into(), 5).unwrap();
         assert!(
             hits.iter().any(|h| h.fact.contains("杭州")),
@@ -395,4 +411,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

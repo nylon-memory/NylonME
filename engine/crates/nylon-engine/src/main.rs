@@ -45,9 +45,7 @@ fn demo_node(id: u64, fact: &str, relations: &[&str], mentions: u32) -> MemoryNo
 /// --file 缺省读 NYLON_API_KEYS_FILE。
 fn keys_cli(args: &[String]) {
     fn opt(args: &[String], name: &str) -> Option<String> {
-        args.windows(2)
-            .find(|w| w[0] == name)
-            .map(|w| w[1].clone())
+        args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone())
     }
     let file = match opt(args, "--file").or_else(|| std::env::var("NYLON_API_KEYS_FILE").ok()) {
         Some(f) => std::path::PathBuf::from(f),

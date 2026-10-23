@@ -161,10 +161,7 @@ fn basic_tokenize(text: &str) -> Vec<String> {
     for c in text.chars() {
         if (c as u32) == 0 || (c as u32) == 0xFFFD || is_whitespace(c) {
             flush(&mut buf, &mut tokens);
-        } else if is_cjk(c) {
-            flush(&mut buf, &mut tokens);
-            tokens.push(c.to_string());
-        } else if is_punctuation(c) {
+        } else if is_cjk(c) || is_punctuation(c) {
             flush(&mut buf, &mut tokens);
             tokens.push(c.to_string());
         } else {

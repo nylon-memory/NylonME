@@ -244,7 +244,11 @@ async fn locomo_evidence_recall() {
         let mut dia2text: HashMap<String, String> = HashMap::new();
         if dump_miss {
             for sess in &sessions {
-                for t in conv_obj[sess.as_str()].as_array().cloned().unwrap_or_default() {
+                for t in conv_obj[sess.as_str()]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                {
                     if let (Some(d), Some(txt)) = (t["dia_id"].as_str(), t["text"].as_str()) {
                         dia2text.insert(
                             d.to_string(),
@@ -529,7 +533,13 @@ async fn locomo_evidence_recall() {
                 for (i, a) in resp.activated.iter().take(15).enumerate() {
                     let fact = a.filaments.as_ref().map(|f| f.fact.as_str()).unwrap_or("");
                     let snip: String = fact.chars().take(90).collect();
-                    println!("  {:>2}. n{} r={:.3} {}", i + 1, a.node_id, a.resonance, snip);
+                    println!(
+                        "  {:>2}. n{} r={:.3} {}",
+                        i + 1,
+                        a.node_id,
+                        a.resonance,
+                        snip
+                    );
                 }
             }
         }
@@ -658,8 +668,7 @@ async fn judge_answer_paper(
         The generated answer might be much longer, but you should be generous with your grading - as long as it touches on the same topic as the gold answer, it should be counted as CORRECT. \
         For time related questions, the gold answer will be a specific date, month, year, etc. The generated answer might be much longer or use relative time references (like 'last Tuesday' or 'next month'), but you should be generous with your grading - as long as it refers to the same date or time period as the gold answer, it should be counted as CORRECT. Even if the format differs (e.g., 'May 7th' vs '7 May'), consider it CORRECT if it's the same date. \
         Return ONLY valid JSON with the label: {\"label\": \"CORRECT\"} or {\"label\": \"WRONG\"}.";
-    let user =
-        format!("Question: {question}\nGold answer: {gold}\nGenerated answer: {candidate}");
+    let user = format!("Question: {question}\nGold answer: {gold}\nGenerated answer: {candidate}");
     llm_json_retry(llm, system, &user)
         .await?
         .get("label")?

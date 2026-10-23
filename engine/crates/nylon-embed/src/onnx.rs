@@ -64,7 +64,8 @@ impl OnnxEmbedder {
             .iter()
             .enumerate()
             .map(|(i, outlet)| {
-                infer.outlet_label(*outlet)
+                infer
+                    .outlet_label(*outlet)
                     .map(str::to_string)
                     .unwrap_or_else(|| format!("input_{i}"))
             })
@@ -155,7 +156,12 @@ impl OnnxEmbedder {
         let mut vec = vec![0.0f32; self.dims];
         match self.pooling {
             Pooling::Cls => {
-                vec.copy_from_slice(hidden.slice(tract_ndarray::s![0, 0, ..]).as_slice().ok_or_else(|| EmbedError("cls slice".into()))?);
+                vec.copy_from_slice(
+                    hidden
+                        .slice(tract_ndarray::s![0, 0, ..])
+                        .as_slice()
+                        .ok_or_else(|| EmbedError("cls slice".into()))?,
+                );
             }
             Pooling::Mean => {
                 let mut wsum = 0.0f32;

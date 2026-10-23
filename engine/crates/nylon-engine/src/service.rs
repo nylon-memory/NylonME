@@ -286,7 +286,11 @@ impl MemoryEngine for EngineService {
             "weave_session",
             &r.tenant_id,
             &r.owner_id,
-            format!("leaves={} facts={}", out.leaf_nodes.len(), out.fact_nodes.len()),
+            format!(
+                "leaves={} facts={}",
+                out.leaf_nodes.len(),
+                out.fact_nodes.len()
+            ),
         );
         Ok(Response::new(WeaveSessionResponse {
             leaf_nodes: out
