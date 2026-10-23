@@ -82,3 +82,84 @@ jobs:
             ${{ matrix.asset }}.tar.gz
             ${{ matrix.asset }}.zip
           generate_release_notes: true
+  mobile-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            triple: aarch64
+            abi: arm64-v8a
+          - target: x86_64-linux-android
+            triple: x86_64
+            abi: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - name: Wire NDK toolchain
+        run: |
+          NDK_CLANG="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CARGO_TARGET_${{ matrix.triple }}_LINUX_ANDROID_LINKER=$NDK_CLANG/${{ matrix.triple }}-linux-android24-clang"
+            echo "CC_${{ matrix.triple }}_linux_android=$NDK_CLANG/${{ matrix.triple }}-linux-android24-clang"
+            echo "AR_${{ matrix.triple }}_linux_android=$NDK_CLANG/llvm-ar"
+          } >> "$GITHUB_ENV"
+      - name: Build mobile lib (onnx)
+        run: cargo build -p nylon-mobile --release --locked --target ${{ matrix.target }} --features onnx
+        working-directory: engine
+      - name: Package
+        run: |
+          pkg=nylonme-mobile-android-${{ matrix.abi }}
+          mkdir -p dist/$pkg/jniLibs/${{ matrix.abi }}
+          cp engine/target/${{ matrix.target }}/release/libnylon_mobile.so dist/$pkg/jniLibs/${{ matrix.abi }}/
+          cp -r engine/crates/nylon-mobile/bindings/kotlin dist/$pkg/bindings-kotlin
+          cp engine/crates/nylon-mobile/INTEGRATION.md README.md LICENSE dist/$pkg/
+          tar -czf $pkg.tar.gz -C dist $pkg
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nylonme-mobile-android-${{ matrix.abi }}.tar.gz
+          generate_release_notes: true
+  mobile-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - name: Build device + simulator staticlibs (onnx)
+        run: |
+          cargo build -p nylon-mobile --release --locked --target aarch64-apple-ios --features onnx
+          cargo build -p nylon-mobile --release --locked --target aarch64-apple-ios-sim --features onnx
+        working-directory: engine
+      - name: Create xcframework
+        run: |
+          B=engine/crates/nylon-mobile/bindings/swift
+          mkdir -p dist/headers && cp $B/nylon_mobileFFI.h $B/nylon_mobileFFI.modulemap dist/headers/
+          B=dist/headers
+          xcodebuild -create-xcframework \
+            -library engine/target/aarch64-apple-ios/release/libnylon_mobile.a -headers $B \
+            -library engine/target/aarch64-apple-ios-sim/release/libnylon_mobile.a -headers $B \
+            -output dist/NylonMobile.xcframework
+      - name: Package
+        run: |
+          pkg=nylonme-mobile-ios
+          mkdir -p dist/$pkg
+          mv dist/NylonMobile.xcframework dist/$pkg/
+          cp engine/crates/nylon-mobile/bindings/swift/nylon_mobile.swift dist/$pkg/
+          cp engine/crates/nylon-mobile/INTEGRATION.md README.md LICENSE dist/$pkg/
+          tar -czf $pkg.tar.gz -C dist $pkg
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nylonme-mobile-ios.tar.gz
+          generate_release_notes: true

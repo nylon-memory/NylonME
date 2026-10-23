@@ -43,3 +43,67 @@ jobs:
           pip install grpcio-tools
           python sdk/python/tools/codegen.py
           git diff --exit-code -- sdk/python/src/nylon_sdk/_gen
+  mobile-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      # GitHub runner 预装 NDK（ANDROID_NDK_LATEST_HOME）；链接器与 cc 均指向 NDK clang
+      - name: Wire NDK toolchain
+        run: |
+          NDK_CLANG="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_CLANG/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$NDK_CLANG/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$NDK_CLANG/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$NDK_CLANG/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_x86_64_linux_android=$NDK_CLANG/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_x86_64_linux_android=$NDK_CLANG/llvm-ar" >> "$GITHUB_ENV"
+      - name: Build aarch64 (onnx，发布配置)
+        run: cargo build -p nylon-mobile --release --target aarch64-linux-android --features onnx
+        working-directory: engine
+      - name: Build x86_64 (模拟器，默认配置)
+        run: cargo build -p nylon-mobile --release --target x86_64-linux-android
+        working-directory: engine
+  mobile-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - name: Build iOS device (onnx，发布配置)
+        run: cargo build -p nylon-mobile --release --target aarch64-apple-ios --features onnx
+        working-directory: engine
+      - name: Build iOS simulator (默认配置)
+        run: cargo build -p nylon-mobile --release --target aarch64-apple-ios-sim
+        working-directory: engine
+  bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+      - name: Build host cdylib
+        run: cargo build -p nylon-mobile
+        working-directory: engine
+      - name: Regenerate Kotlin + Swift bindings
+        run: |
+          cargo run -p nylon-mobile --bin gen-bindings --features bindgen-cli -- \
+            generate --library target/debug/libnylon_mobile.so --language kotlin \
+            --out-dir crates/nylon-mobile/bindings/kotlin --no-format
+          cargo run -p nylon-mobile --bin gen-bindings --features bindgen-cli -- \
+            generate --library target/debug/libnylon_mobile.so --language swift \
+            --out-dir crates/nylon-mobile/bindings/swift --no-format
+        working-directory: engine
+      - name: Bindings snapshot must be fresh
+        run: git diff --exit-code -- engine/crates/nylon-mobile/bindings
