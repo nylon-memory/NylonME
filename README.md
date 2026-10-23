@@ -87,6 +87,15 @@ retriever = NylonMeRetriever(target="127.0.0.1:50051", owner="alice")
 docs = retriever.invoke("flight seat preference")
 ```
 
+## Mobile SDK (On-Device, Android / iOS)
+
+The same engine runs **inside your app process** — no daemon, no ports, fully on-device:
+UniFFI bindings (`engine/crates/nylon-mobile`), optional on-device ONNX semantic
+embedding (bge-small-zh quantized, 24 MB, pure-Rust tract inference), WAL-backed
+crash recovery with automatic checkpointing. Lifecycle hooks, model deployment and
+the data-safety contract: [engine/crates/nylon-mobile/INTEGRATION.md](engine/crates/nylon-mobile/INTEGRATION.md).
+API surface and device benchmarks: [engine/crates/nylon-mobile/README.md](engine/crates/nylon-mobile/README.md).
+
 ## Quick Start
 
 ### Run with Docker (one command, no Rust toolchain needed)

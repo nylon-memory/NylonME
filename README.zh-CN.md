@@ -71,6 +71,15 @@ with NylonClient("127.0.0.1:50051", owner="alice") as client:
 ```
 
 详见 [sdk/python/README.md](sdk/python/README.md)。
+## 移动端 SDK（端上运行，Android / iOS）
+
+同一套引擎可以**跑在 App 进程内**——无守护进程、无端口、纯端上：
+UniFFI 绑定（`engine/crates/nylon-mobile`）、可选端上 ONNX 语义嵌入
+（bge-small-zh 量化模型 24MB，tract 纯 Rust 推理）、WAL 崩溃恢复 + 自动
+checkpoint。生命周期挂接、模型部署与数据安全契约见
+[engine/crates/nylon-mobile/INTEGRATION.md](engine/crates/nylon-mobile/INTEGRATION.md)；
+API 说明与真机跑分见 [engine/crates/nylon-mobile/README.md](engine/crates/nylon-mobile/README.md)。
+
 ## 快速开始
 
 ```bash
