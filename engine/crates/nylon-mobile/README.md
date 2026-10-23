@@ -54,7 +54,8 @@ uniffi-bindgen generate --library target\aarch64-linux-android\release\libnylon_
 3. ~~生命周期~~ **已完成**：自动 checkpoint（默认 32 写/300s 脏触发，`autoCheckpoint*` 可调）+
    `shutdown()`（compact+落盘）；WAL 恢复开箱即用；Kotlin/Swift 绑定生成与 App 侧
    挂接样例（onStop→checkpoint / onDestroy→shutdown）见 `INTEGRATION.md`；
-4. **CI**：release workflow 增加 Android/iOS target 与绑定产物发布。
+4. ~~CI~~ **已完成**：ci.yml 新增 Android（NDK clang，aarch64 onnx + x86_64 模拟器）/ iOS
+   （device onnx + simulator）构建与绑定新鲜度检查；release.yml 按 tag 产出 .so/xcframework + 绑定包。
 
 ## 与服务的差异说明
 
